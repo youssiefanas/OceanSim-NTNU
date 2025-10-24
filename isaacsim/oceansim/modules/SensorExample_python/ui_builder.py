@@ -287,7 +287,7 @@ class UIBuilder():
             
         # add bluerov robot as reference
         robot_prim_path = "/World/rob"
-        robot_usd_path = get_oceansim_assets_path() + "/Bluerov/BROV_low.usd"
+        robot_usd_path = get_oceansim_assets_path() + "/Bluerov/BROV_IMU.usd"
         self._rob = add_reference_to_stage(usd_path=robot_usd_path, prim_path=robot_prim_path)
         # Toggle rigid body and collider preset for robot, and set zero gravity to mimic underwater environment
         rob_rigidBody_API = PhysxSchema.PhysxRigidBodyAPI.Apply(get_prim_at_path(robot_prim_path))
