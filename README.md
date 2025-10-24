@@ -2,7 +2,7 @@
 
 This guide will help you set up and run the BlueROV simulation with an IMU sensor in OceanSim.
 
-### 1. Download the BlueROV Asset File
+### 1. Download the BlueROV Asset File with IMU
 
 Download the `BROV_IMU.usd` file from:
 [Google Drive Link](https://drive.google.com/file/d/1iUSkD-w_9yzr1Q_m8cNrHmGdzrtYz2bs/view?usp=sharing)
