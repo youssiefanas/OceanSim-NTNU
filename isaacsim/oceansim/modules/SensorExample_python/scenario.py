@@ -23,6 +23,7 @@ class MHL_Sensor_Example_Scenario():
         self._cam = None
         self._DVL = None
         self._baro = None
+        self._IMU = None
 
         self._ctrl_mode = None
 
@@ -34,12 +35,13 @@ class MHL_Sensor_Example_Scenario():
         self._enable_ros2_control = True
         self._ros2_control_mode = "velocity control"
 
-    def setup_scenario(self, rob, sonar, cam, DVL, baro, ctrl_mode):
+    def setup_scenario(self, rob, sonar, cam, DVL, baro, IMU, ctrl_mode):
         self._rob = rob
         self._sonar = sonar
         self._cam = cam
         self._DVL = DVL
         self._baro = baro
+        self._IMU = IMU
         self._ctrl_mode = ctrl_mode
         if self._sonar is not None:
             self._sonar.sonar_initialize(include_unlabelled=True)
@@ -49,8 +51,14 @@ class MHL_Sensor_Example_Scenario():
             self._DVL_reading = [0.0, 0.0, 0.0]
         if self._baro is not None:
             self._baro_reading = 101325.0 # atmospheric pressure (Pa)
-        
-        
+        if self._IMU is not None:         
+            self._IMU_reading = {
+                'linear_acceleration': np.array([0.0, 0.0, 0.0]),
+                'angular_velocity':    np.array([0.0, 0.0, 0.0]),
+                'orientation':         np.array([1.0, 0.0, 0.0, 0.0]),
+                'time':                0.0,
+                'physics_step':        0    
+            }        
         # Apply the physx force schema if manual control
         if ctrl_mode == "Manual control":
             from ...utils.keyboard_cmd import keyboard_cmd
@@ -169,6 +177,7 @@ class MHL_Sensor_Example_Scenario():
         self._cam = None
         self._DVL = None
         self._baro = None
+        self._IMU = None
         self._running_scenario = False
         self._time = 0.0
 
@@ -189,6 +198,8 @@ class MHL_Sensor_Example_Scenario():
             self._DVL_reading = self._DVL.get_linear_vel()
         if self._baro is not None:
             self._baro_reading = self._baro.get_pressure()
+        if self._IMU is not None:
+            self._IMU_reading = self._IMU.get_imu_data()
 
         if self._ctrl_mode=="Manual control":
             force_cmd = Gf.Vec3f(*self._force_cmd._base_command)
