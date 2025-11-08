@@ -33,7 +33,7 @@ class UIBuilder():
         self._overview = EXTENSION_DESCRIPTION
         self._extension_path = get_extension_path(self._ext_id)
         
-        self._ctrl_mode = 'Manual control'
+        self._ctrl_mode = 'Manual control' #"ROS control" 
         self._waypoints_path = self._extension_path + '/demo/demo_waypoints.txt'
         # Get access to the timeline to control stop/pause/play programmatically
         self._timeline = omni.timeline.get_timeline_interface()
@@ -97,6 +97,8 @@ class UIBuilder():
         """
         self._DVL_event_sub = None
         self._baro_event_sub = None
+        self._IMU_event_sub_gyro = None  # <--- CORRECT NAME
+        self._IMU_event_sub_accel = None # <--- CORRECT NAME
         for ui_elem in self.wrapped_ui_elements:
             ui_elem.cleanup()
         for frame in self.frames:
@@ -155,6 +157,23 @@ class UIBuilder():
                 ) 
                 self._use_baro = False
                 self.wrapped_ui_elements.append(baro_check_box)
+
+                self.accel_check_box = CheckBox(
+                    "Accelertometer",
+                    default_value=False,
+                    tooltip='Click this checkbox to activate Accelertometer',   
+                    on_click_fn=self._on_Accel_checkbox_click_fn
+                )
+                self._use_IMU = False
+                self.wrapped_ui_elements.append(self.accel_check_box)
+                self.gyro_check_box = CheckBox(
+                    "Gyroscope",
+                    default_value=False,
+                    tooltip='Click this checkbox to activate Gyroscope',
+                    on_click_fn=self._on_Gyro_checkbox_click_fn
+                )
+                self._use_IMU = False
+                self.wrapped_ui_elements.append(self.gyro_check_box)
 
                 
         world_controls_frame = CollapsableFrame("World Controls", collapsed=False)
@@ -237,6 +256,11 @@ class UIBuilder():
         self._DVL_trans = np.array([0,0,-0.1])
         self._baro = None
         self._water_surface = 1.43389 # Arbitrary
+        self._IMU = None
+        self._IMU_trans = np.array([0, 0, 0])
+        self._IMU_orient = np.array([1, 0, 0, 0])
+
+
         
         # Scenario
         self._scenario = MHL_Sensor_Example_Scenario()
@@ -338,6 +362,13 @@ class UIBuilder():
 
             self._baro = BarometerSensor(prim_path=robot_prim_path + '/Baro',
                                         water_surface_z=self._water_surface)
+        if self._use_IMU:
+            from isaacsim.oceansim.sensors.IMU import IMU
+
+            self._IMU = IMU(prim_path=robot_prim_path + '/IMU',
+                            translation=self._IMU_trans,
+                            orientation=self._IMU_orient
+                            )
             
 
 
@@ -357,7 +388,7 @@ class UIBuilder():
 
     def _reset_scenario(self):
         self._scenario.teardown_scenario()
-        self._scenario.setup_scenario(self._rob, self._sonar, self._cam, self._DVL, self._baro, self._ctrl_mode)
+        self._scenario.setup_scenario(self._rob, self._sonar, self._cam, self._DVL, self._baro, self._IMU, self._ctrl_mode)
     def _on_post_reset_btn(self):
         """
         This function is attached to the Reset Button as the post_reset_fn callback.
@@ -439,6 +470,13 @@ class UIBuilder():
         self._use_baro = model
         print('Reload the scene for changes to take effect.')
     
+    def _on_Accel_checkbox_click_fn(self, model):
+        self._use_IMU = model or self._gyro_check_box.get_value_as_bool()
+        print('Reload the scene for changes to take effect.')
+    def _on_Gyro_checkbox_click_fn(self, model):
+        self._use_IMU = model or self._accel_check_box.get_value_as_bool()
+        print('Reload the scene for changes to take effect.')
+    
     def _on_manual_ctrl_cb_click_fn(self, model):
         self._manual_ctrl = model
         print('Reload the scene for changes to take effect.')
@@ -457,7 +495,11 @@ class UIBuilder():
                 if self._use_baro is True:
                     self._build_baro_plot()
                     self.sensor_reading_frame.visible = True
-                if not self._use_baro and not self._use_DVL:
+                if self._use_IMU is True:
+                    self._build_gyro_plot()
+                    self._build_accel_plot()
+                    self.sensor_reading_frame.visible = True
+                if not self._use_baro and not self._use_DVL and not self._use_IMU:
                     self.sensor_reading_frame.visible = False 
         with self.waypoints_frame:
             if self._ctrl_mode == 'Waypoints':
@@ -597,5 +639,104 @@ class UIBuilder():
         if len(self._baro_data) > 50:
             self._baro_data.pop(0)
         self._baro_plot.set_data(*self._baro_data)
+
+    def _build_gyro_plot(self):
+        self._IMU_event_sub_gyro = None
+        self._gyro_x = []
+        self._gyro_y = []
+        self._gyro_z = []
+
+        kwargs = {
+            "label": "Gyroscope reading (rad/s)",
+            "on_clicked_fn": self.toggle_gyro_step,
+            "data": [self._gyro_x, self._gyro_y, self._gyro_z],
+        }
+        (
+            self._gyro_plot,
+            self._gyro_plot_value,
+        ) = combo_cb_xyz_plot_builder(**kwargs)
+
+    def toggle_gyro_step(self, val=None):
+        print("Gyroscope DAQ: ", val)
+        if val: # Checkbox is checked ON
+            if not self._IMU_event_sub_gyro:
+                self._IMU_event_sub_gyro = (
+                    omni.kit.app.get_app().get_update_event_stream().create_subscription_to_pop(self._on_gyro_step)
+                )
+        else: # Checkbox is checked OFF
+            self._IMU_event_sub_gyro = None
+
+    def _on_gyro_step(self, e: carb.events.IEvent):
+        # Casting np.float32 to float32 is necessary for the ui.Plot expects a consistent data type flow
+        x_gyro = float(self._scenario._IMU_reading['angular_velocity'][0])
+        y_gyro = float(self._scenario._IMU_reading['angular_velocity'][1])
+        z_gyro = float(self._scenario._IMU_reading['angular_velocity'][2])
+
+        self._gyro_plot_value[0].set_value(x_gyro)
+        self._gyro_plot_value[1].set_value(y_gyro)
+        self._gyro_plot_value[2].set_value(z_gyro)
+
+        self._gyro_x.append(x_gyro)
+        self._gyro_y.append(y_gyro)
+        self._gyro_z.append(z_gyro)
+        if len(self._gyro_x) > 50:
+            self._gyro_x.pop(0)
+            self._gyro_y.pop(0)
+            self._gyro_z.pop(0)
+
+        self._gyro_plot[0].set_data(*self._gyro_x)
+        self._gyro_plot[1].set_data(*self._gyro_y)
+        self._gyro_plot[2].set_data(*self._gyro_z)
+
+    def _build_accel_plot(self):
+        self._IMU_event_sub_accel = None
+        self._accel_x = []
+        self._accel_y = []
+        self._accel_z = []
+
+        kwargs = {
+            "label": "Accelertometer reading (m/s²)",
+            "on_clicked_fn": self.toggle_accel_step,
+            "data": [self._accel_x, self._accel_y, self._accel_z],
+        }
+        (
+            self._accel_plot,
+            self._accel_plot_value,
+        ) = combo_cb_xyz_plot_builder(**kwargs)
+
+    def toggle_accel_step(self, val=None):
+        print("Accelertometer DAQ: ", val)
+        if val:
+            if not self._IMU_event_sub_accel:
+                self._IMU_event_sub_accel = (
+                    omni.kit.app.get_app().get_update_event_stream().create_subscription_to_pop(self._on_accel_step)
+                )
+            else:
+                self._IMU_event_sub_accel = None
+        else:
+            self._IMU_event_sub_accel = None
+
+    def _on_accel_step(self, e: carb.events.IEvent):
+        # Casting np.float32 to float32 is necessary for the ui.Plot expects a consistent data type flow
+        x_accel = float(self._scenario._IMU_reading['linear_acceleration'][0])
+        y_accel = float(self._scenario._IMU_reading['linear_acceleration'][1])
+        z_accel = float(self._scenario._IMU_reading['linear_acceleration'][2])
+
+        self._accel_plot_value[0].set_value(x_accel)
+        self._accel_plot_value[1].set_value(y_accel)
+        self._accel_plot_value[2].set_value(z_accel)
+
+        self._accel_x.append(x_accel)
+        self._accel_y.append(y_accel)
+        self._accel_z.append(z_accel)
+        if len(self._accel_x) > 50:
+            self._accel_x.pop(0)
+            self._accel_y.pop(0)
+            self._accel_z.pop(0)
+
+        self._accel_plot[0].set_data(*self._accel_x)
+        self._accel_plot[1].set_data(*self._accel_y)
+        self._accel_plot[2].set_data(*self._accel_z)
+
 
         
