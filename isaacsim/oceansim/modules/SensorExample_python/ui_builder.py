@@ -46,6 +46,8 @@ class UIBuilder():
         # Run initialization for the provided example
         self._on_init()
 
+        self.physics_freq = 200.0 # Physics frequency in the simulator [Hz]
+
     ###################################################################################
     #           The Functions Below Are Called Automatically By extension.py
     ###################################################################################
@@ -159,9 +161,9 @@ class UIBuilder():
                 self.wrapped_ui_elements.append(baro_check_box)
 
                 self.accel_check_box = CheckBox(
-                    "Accelertometer",
+                    "Accelerometer",
                     default_value=False,
-                    tooltip='Click this checkbox to activate Accelertometer',   
+                    tooltip='Click this checkbox to activate Accelerometer',   
                     on_click_fn=self._on_Accel_checkbox_click_fn
                 )
                 self._use_IMU = False
@@ -201,7 +203,7 @@ class UIBuilder():
                 self._load_btn = LoadButton(
                     "Load Button", "LOAD", setup_scene_fn=self._setup_scene, setup_post_load_fn=self._setup_scenario
                 )
-                # self._load_btn.set_world_settings(physics_dt=1 / 60.0, rendering_dt=1 / 60.0)
+                self._load_btn.set_world_settings(physics_dt=1 / self.physics_freq, rendering_dt=1 / self.physics_freq)
                 self.wrapped_ui_elements.append(self._load_btn)
 
                 self._reset_btn = ResetButton(
@@ -348,6 +350,7 @@ class UIBuilder():
                                     translation=self._cam_trans)
             self._cam.set_focal_length(0.1 * self._cam_focal_length)
             self._cam.set_clipping_range(0.1, 100)
+            self._cam.set_frequency(int(self.physics_freq/5))
             
         if self._use_DVL:
             from isaacsim.oceansim.sensors.DVLsensor import DVLsensor
@@ -367,7 +370,8 @@ class UIBuilder():
 
             self._IMU = IMU(prim_path=robot_prim_path + '/IMU',
                             translation=self._IMU_trans,
-                            orientation=self._IMU_orient
+                            orientation=self._IMU_orient,
+                            frequency=200  # Match your physics frequency
                             )
             
 
@@ -412,6 +416,7 @@ class UIBuilder():
         Args:
             step (float): The dt of the current physics step
         """
+    
         self._scenario.update_scenario(step)
 
     def _on_run_scenario_a_text(self):
@@ -695,7 +700,7 @@ class UIBuilder():
         self._accel_z = []
 
         kwargs = {
-            "label": "Accelertometer reading (m/s²)",
+            "label": "Accelerometer reading (m/s²)",
             "on_clicked_fn": self.toggle_accel_step,
             "data": [self._accel_x, self._accel_y, self._accel_z],
         }
@@ -705,7 +710,7 @@ class UIBuilder():
         ) = combo_cb_xyz_plot_builder(**kwargs)
 
     def toggle_accel_step(self, val=None):
-        print("Accelertometer DAQ: ", val)
+        print("Accelerometer DAQ: ", val)
         if val:
             if not self._IMU_event_sub_accel:
                 self._IMU_event_sub_accel = (

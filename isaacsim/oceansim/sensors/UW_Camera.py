@@ -169,7 +169,7 @@ class UW_Camera(Camera):
         except Exception as e:
             print(f'[{self._name}] ROS2 uw image publisher setup failed: {e}')
 
-    def _ros2_publish_uw_img(self, uw_img):
+    def _ros2_publish_uw_img(self, uw_img, sim_time=None):
         """
         publish the uw image
         """
@@ -195,7 +195,11 @@ class UW_Camera(Camera):
 
             # Create a ROS2 Image message
             msg = CompressedImage()
-            msg.header.stamp = self._ros2_uw_img_node.get_clock().now().to_msg()
+            if sim_time:
+                msg.header.stamp.sec = int(sim_time)
+                msg.header.stamp.nanosec = int((sim_time - int(sim_time)) * 1e9)
+            else:
+                msg.header.stamp = self._ros2_uw_img_node.get_clock().now().to_msg()
             msg.header.frame_id = 'uw_image'
             msg.format = 'jpeg'
             msg.data = compressed_img.tobytes()
@@ -217,42 +221,48 @@ class UW_Camera(Camera):
         except Exception as e:
             print(f'[{self._name}] ROS2 uw image publish failed: {e}')
 
-    def render(self):
+    def render(self, sim_time=None):
         """Process and display a single frame with underwater effects.
     
         Note:
             - Updates viewport display if enabled
             - Saves image to disk if writing_dir was specified
         """
-        raw_rgba = self._rgba_annot.get_data()
-        depth = self._depth_annot.get_data()
-        if raw_rgba.size !=0:
-            uw_image = wp.zeros_like(raw_rgba)
-            wp.launch(
-                dim=np.flip(self.get_resolution()),
-                kernel=UW_render,
-                inputs=[
-                    raw_rgba,
-                    depth,
-                    self._backscatter_value,
-                    self._atten_coeff,
-                    self._backscatter_coeff
-                ],
-                outputs=[
-                    uw_image
-                ]
-            )  
-            
-            if self._viewport:
-                self._provider.set_bytes_data_from_gpu(uw_image.ptr, self.get_resolution())
-            if self._writing:
-                self._writing_backend.schedule(write_image, path=f'UW_image_{self._id}.png', data=uw_image)
-                print(f'[{self._name}] [{self._id}] Rendered image saved to {self._writing_backend.output_dir}')
-            if self._enable_ros2_pub:
-                self._ros2_publish_uw_img(uw_image)
-                pass
+        try:
+            raw_rgba = self._rgba_annot.get_data()
+            depth = self._depth_annot.get_data()
+            if raw_rgba.size !=0:
+                uw_image = wp.zeros_like(raw_rgba)
+                wp.launch(
+                    dim=np.flip(self.get_resolution()),
+                    kernel=UW_render,
+                    inputs=[
+                        raw_rgba,
+                        depth,
+                        self._backscatter_value,
+                        self._atten_coeff,
+                        self._backscatter_coeff
+                    ],
+                    outputs=[
+                        uw_image
+                    ]
+                )  
+                
+                if self._viewport:
+                    self._provider.set_bytes_data_from_gpu(uw_image.ptr, self.get_resolution())
+                if self._writing:
+                    self._writing_backend.schedule(write_image, path=f'UW_image_{self._id}.png', data=uw_image)
+                    print(f'[{self._name}] [{self._id}] Rendered image saved to {self._writing_backend.output_dir}')
+                if self._enable_ros2_pub:
+                    self._ros2_publish_uw_img(uw_image, sim_time)
+                    pass
 
-            self._id += 1
+                self._id += 1
+
+        except Exception as e:
+            print(f"Error getting annotator data: {e}")
+            import traceback
+            traceback.print_exc()
 
     def make_viewport(self):
         """Create a viewport window for real-time visualization.

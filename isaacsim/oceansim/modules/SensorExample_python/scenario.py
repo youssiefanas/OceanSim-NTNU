@@ -1,6 +1,7 @@
 # Omniverse import
 import numpy as np
 from pxr import Gf, PhysxSchema
+import time
 
 # Isaac sim import
 from isaacsim.core.prims import SingleRigidPrim
@@ -51,7 +52,8 @@ class MHL_Sensor_Example_Scenario():
             self._DVL_reading = [0.0, 0.0, 0.0]
         if self._baro is not None:
             self._baro_reading = 101325.0 # atmospheric pressure (Pa)
-        if self._IMU is not None:         
+        if self._IMU is not None:
+            self._IMU.initialize()
             self._IMU_reading = {
                 'linear_acceleration': np.array([0.0, 0.0, 0.0]),
                 'angular_velocity':    np.array([0.0, 0.0, 0.0]),
@@ -189,11 +191,23 @@ class MHL_Sensor_Example_Scenario():
             return
         
         self._time += step
+
+        # Debug: Check actual update rate
+        if not hasattr(self, '_last_update_time'):
+            self._last_update_time = time.time()
+            self._update_count = 0
+        
+        self._update_count += 1
+        if self._update_count % 100 == 0:  # Print every 100 updates
+            current_time = time.time()
+            actual_hz = 100 / (current_time - self._last_update_time)
+            print(f"Physics callback rate: {actual_hz:.1f} Hz")
+            self._last_update_time = current_time
         
         if self._sonar is not None:
             self._sonar.make_sonar_data()
         if self._cam is not None:
-            self._cam.render()
+            self._cam.render(sim_time=self._time)
         if self._DVL is not None:
             self._DVL_reading = self._DVL.get_linear_vel()
         if self._baro is not None:
