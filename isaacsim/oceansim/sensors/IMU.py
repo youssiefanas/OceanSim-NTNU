@@ -50,16 +50,61 @@ class IMU(IMUSensor):
             orientation_filter_size=orientation_filter_size
         )
 
+        # 1. Noise Density (White Noise)
+        self.gyro_noise_density = 1.0e-4  # rad/s / sqrt(Hz)
+        self.accel_noise_density = 1.0e-3 # m/s^2 / sqrt(Hz)
+        
+        # 2. Random Walk (Bias)
+        self.Eb_gyro = 1.0e-5
+        self.Eb_acc = 1.0e-4
+
+        # Initialize Bias accumulation vectors
+        self.current_gyro_bias = np.zeros(3)
+        self.current_accel_bias = np.zeros(3)
+        
+        # Helper to track time for integration
+        # self.last_step_time = None
+
+    def _add_noise(self, true_ang_vel, true_lin_acc, dt):
+        """
+        Adds Gaussian white noise and Random Walk Bias to the raw sensor data.
+        """
+        # 1. Update Random Walk Bias (WIener process)
+        # Bias changes by: RandomStep * sqrt(dt)
+        self.current_gyro_bias += np.random.normal(0, self.Eb_gyro * np.sqrt(dt), 3)
+        self.current_accel_bias += np.random.normal(0, self.Eb_acc * np.sqrt(dt), 3)
+
+        # 2. Calculate White Noise Standard Deviation for this step
+        # Sigma_discrete = Density * (1 / sqrt(dt))
+        gyro_sigma = self.gyro_noise_density * (1.0 / np.sqrt(dt))
+        accel_sigma = self.accel_noise_density * (1.0 / np.sqrt(dt))
+
+        # 3. Apply: Measurement = True + Bias + WhiteNoise
+        noisy_ang_vel = true_ang_vel + self.current_gyro_bias + np.random.normal(0, gyro_sigma, 3)
+        noisy_lin_acc = true_lin_acc + self.current_accel_bias + np.random.normal(0, accel_sigma, 3)
+
+        return noisy_ang_vel, noisy_lin_acc
+
     def get_imu_data(self):
         """
         Retrieve the current IMU data including linear acceleration, angular velocity, and orientation.
         Returns:
             dict: A dictionary containing 'linear_acceleration', 'angular_velocity', and 'orientation'"""
         raw = self.get_current_frame(read_gravity=True)
+
+        dt = raw.get('physics_step')
+        if dt <= 0: dt = 0.005 # Fallback to avoid div/0
+
+        clean_ang_vel = np.array(raw['ang_vel'])
+        clean_lin_acc = np.array(raw['lin_acc'])
+
+        # Apply noise function
+        noisy_ang_vel, noisy_lin_acc = self._add_noise(clean_ang_vel, clean_lin_acc, dt)
+
         imu_data = {
-            'linear_acceleration': np.array(raw['lin_acc']),
+            'linear_acceleration': noisy_lin_acc,
             'linear_acceleration_covariance': self._linear_acceleration_covariance,
-            'angular_velocity':    np.array(raw['ang_vel']),
+            'angular_velocity':    noisy_ang_vel,
             'angular_velocity_covariance': self._angular_velocity_covariance,
             'orientation':         np.array(raw['orientation']),
             'orientation_covariance': self._orientation_covariance,
@@ -76,9 +121,9 @@ class IMU(IMUSensor):
                     enable_ros2_pub=True,
                     imu_topic="/oceansim/robot/imu",
                     ros2_pub_frequency=200,
-                    orientation_covariance=np.zeros(9),
-                    angular_velocity_covariance=np.zeros(9),
-                    linear_acceleration_covariance=np.zeros(9),
+                    orientation_covariance=np.eye(9).reshape(-1) * 1e-6,
+                    angular_velocity_covariance=np.eye(9).reshape(-1) * 1e-4,
+                    linear_acceleration_covariance=np.eye(9).reshape(-1) * 1e-3,
                 ):
 
         self._orientation_covariance = orientation_covariance
@@ -128,7 +173,7 @@ class IMU(IMUSensor):
                 return
 
             # fps control
-            current_time = time.time()
+            # current_time = time.time()
             # if current_time - self._last_publish_time < (1.0 / self._frequency):
             #     return
 
@@ -167,7 +212,7 @@ class IMU(IMUSensor):
 
             rclpy.spin_once(self._ros2_imu_node, timeout_sec=0.0)
 
-            self._last_publish_time = current_time
+            self._last_publish_time = time.time()
 
             # debug
             # self._ros2_uw_imu_node.get_logger().info(
