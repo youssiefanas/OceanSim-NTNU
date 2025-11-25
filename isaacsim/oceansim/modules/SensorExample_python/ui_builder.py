@@ -203,7 +203,7 @@ class UIBuilder():
                 self._load_btn = LoadButton(
                     "Load Button", "LOAD", setup_scene_fn=self._setup_scene, setup_post_load_fn=self._setup_scenario
                 )
-                self._load_btn.set_world_settings(physics_dt=1 / self.physics_freq, rendering_dt=1 / self.physics_freq)
+                self._load_btn.set_world_settings(physics_dt=1/self.physics_freq, rendering_dt=1/60.0)
                 self.wrapped_ui_elements.append(self._load_btn)
 
                 self._reset_btn = ResetButton(
@@ -350,7 +350,7 @@ class UIBuilder():
                                     translation=self._cam_trans)
             self._cam.set_focal_length(0.1 * self._cam_focal_length)
             self._cam.set_clipping_range(0.1, 100)
-            self._cam.set_frequency(int(self.physics_freq/5))
+            self._cam.set_frequency(int(self.physics_freq/10))
             
         if self._use_DVL:
             from isaacsim.oceansim.sensors.DVLsensor import DVLsensor
@@ -371,7 +371,6 @@ class UIBuilder():
             self._IMU = IMU(prim_path=robot_prim_path + '/IMU',
                             translation=self._IMU_trans,
                             orientation=self._IMU_orient,
-                            frequency=200  # Match your physics frequency
                             )
             
 

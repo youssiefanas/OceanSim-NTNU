@@ -203,17 +203,34 @@ class MHL_Sensor_Example_Scenario():
             actual_hz = 100 / (current_time - self._last_update_time)
             print(f"Physics callback rate: {actual_hz:.1f} Hz")
             self._last_update_time = current_time
+
+        # IMU UPDATE (Fast - 200 Hz)
+        # We ALWAYS update the IMU every physics step
+        if self._IMU is not None:
+            self._IMU_reading = self._IMU.get_imu_data()
+
+        # CAMERA UPDATE (Slow - 20 Hz)
+        # We only render if enough SIMULATION time has passed.
+        # Initialize tracker if it doesn't exist
+        if not hasattr(self, '_last_cam_time'):
+            self._last_cam_time = 0.0
+        
+        TARGET_CAM_FPS = 20.0
+        
+        # Check if 0.05s (sim time) has passed since last render
+        if (self._time - self._last_cam_time) >= (1.0 / TARGET_CAM_FPS):
+            if self._cam is not None:
+                self._cam.render(sim_time=self._time)
+            
+            # Update tracker
+            self._last_cam_time = self._time
         
         if self._sonar is not None:
             self._sonar.make_sonar_data()
-        if self._cam is not None:
-            self._cam.render(sim_time=self._time)
         if self._DVL is not None:
             self._DVL_reading = self._DVL.get_linear_vel()
         if self._baro is not None:
             self._baro_reading = self._baro.get_pressure()
-        if self._IMU is not None:
-            self._IMU_reading = self._IMU.get_imu_data()
 
         if self._ctrl_mode=="Manual control":
             force_cmd = Gf.Vec3f(*self._force_cmd._base_command)
