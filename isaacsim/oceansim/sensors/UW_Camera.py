@@ -229,7 +229,7 @@ class UW_Camera(Camera):
             - Saves image to disk if writing_dir was specified
         """
         try:
-            raw_rgba = self._rgba_annot.get_data()
+            raw_rgba = self._rgba_annot.get_data(device="cuda")
             depth = self._depth_annot.get_data()
             if raw_rgba.size !=0:
                 uw_image = wp.zeros_like(raw_rgba)
