@@ -2,10 +2,14 @@
 import numpy as np
 from pxr import Gf, PhysxSchema
 import time
+import rclpy
+
+from geometry_msgs.msg import Quaternion, Vector3, Pose, PoseStamped
 
 # Isaac sim import
 from isaacsim.core.prims import SingleRigidPrim
 from isaacsim.core.utils.prims import get_prim_path
+import omni.timeline
 
 # ROS Control import
 try:
@@ -18,7 +22,7 @@ except ImportError as e:
     print("[Scenario] ROS2 Control functionality will be disabled")
 
 class MHL_Sensor_Example_Scenario():
-    def __init__(self):
+    def __init__(self, publish_pose=True):
         self._rob = None
         self._sonar = None
         self._cam = None
@@ -35,6 +39,26 @@ class MHL_Sensor_Example_Scenario():
         self._ros2_control_receiver = None
         self._enable_ros2_control = True
         self._ros2_control_mode = "velocity control"
+
+        self._rob_pose_topic = "/oceansim/robot/pose"
+        self._publish_pose = publish_pose
+
+        # Initialize ROS2 context if not already done
+        if not rclpy.ok():
+            rclpy.init()
+            print(f'[{self._name}] ROS2 context initialized')
+
+        if self._publish_pose:
+            # Create pose publisher node
+            node_name = f'oceansim_rob_pose_pub'
+            self._ros2_rob_pose_node = rclpy.create_node(node_name)
+            self._rob_pose_pub = self._ros2_rob_pose_node.create_publisher(
+                PoseStamped,
+                self._rob_pose_topic,
+                10
+            )
+
+        self._timeline = omni.timeline.get_timeline_interface()
 
     def setup_scenario(self, rob, sonar, cam, DVL, baro, IMU, ctrl_mode):
         self._rob = rob
@@ -203,6 +227,44 @@ class MHL_Sensor_Example_Scenario():
             actual_hz = 100 / (current_time - self._last_update_time)
             print(f"Physics callback rate: {actual_hz:.1f} Hz")
             self._last_update_time = current_time
+
+        if self._rob_pose_pub is None:
+            return
+
+        # fps control
+        # current_time = time.time()
+        # if current_time - self._last_publish_time < (1.0 / self._frequency):
+        #     return
+
+        if self._publish_pose:
+            # Create a ROS2 Imu message
+            msg = PoseStamped()
+
+            sim_time = self._timeline.get_current_time()  # Simulation time
+            msg.header.stamp.sec = int(sim_time)
+            msg.header.stamp.nanosec = int((sim_time - int(sim_time)) * 1e9)
+            msg.header.frame_id = 'map'
+
+            # Get the full 4x4 World Transform Matrix
+            world_transform = omni.usd.get_world_transform_matrix(self._rob)
+
+            # Extract Rotation (Quaternion) and Translation
+            # method .ExtractRotation() returns a Gf.Rotation, which we convert to Quat
+            rot = world_transform.ExtractRotationQuat() 
+            trans = world_transform.ExtractTranslation()
+
+            # Populate Message
+            msg.pose.position.x = float(trans[0])
+            msg.pose.position.y = float(trans[1])
+            msg.pose.position.z = float(trans[2])
+
+            msg.pose.orientation.w = float(rot.GetReal())
+            msg.pose.orientation.x = float(rot.GetImaginary()[0])
+            msg.pose.orientation.y = float(rot.GetImaginary()[1])
+            msg.pose.orientation.z = float(rot.GetImaginary()[2])
+            
+            # Publish the message
+            self._rob_pose_pub.publish(msg)
 
         # IMU UPDATE (Fast - 200 Hz)
         # We ALWAYS update the IMU every physics step
