@@ -46,7 +46,7 @@ class MHL_Sensor_Example_Scenario():
         # Initialize ROS2 context if not already done
         if not rclpy.ok():
             rclpy.init()
-            print(f'[{self._name}] ROS2 context initialized')
+            print('[ROS2 context initialized')
 
         if self._publish_pose:
             # Create pose publisher node
