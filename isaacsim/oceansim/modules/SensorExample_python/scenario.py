@@ -88,6 +88,9 @@ class MHL_Sensor_Example_Scenario():
         # Apply the physx force schema if manual control
         if ctrl_mode == "Manual control":
             from ...utils.keyboard_cmd import keyboard_cmd
+            from ...utils.gamepad_cmd import gamepad_cmd
+            import carb.input
+            from ...utils.gamepad_cmd import gamepad_cmd
 
             self._rob_forceAPI = PhysxSchema.PhysxForceAPI.Apply(self._rob)
             self._force_cmd = keyboard_cmd(base_command=np.array([0.0, 0.0, 0.0]),
@@ -120,6 +123,32 @@ class MHL_Sensor_Example_Scenario():
                                         # row command (negative)
                                         "RIGHT": [10.0, 0.0, 0.0],
                                       })
+            self._joy_force = gamepad_cmd(
+                input_mapping={
+                    carb.input.GamepadInput.LEFT_STICK_UP:    np.array([1.0, 0.0, 0.0]),   # Forward
+                    carb.input.GamepadInput.LEFT_STICK_DOWN:  np.array([-1.0, 0.0, 0.0]),  # Backward
+                    carb.input.GamepadInput.LEFT_STICK_LEFT:  np.array([0.0, 1.0, 0.0]),   # Left
+                    carb.input.GamepadInput.LEFT_STICK_RIGHT: np.array([0.0, -1.0, 0.0]),  # Right
+                    carb.input.GamepadInput.RIGHT_TRIGGER:    np.array([0.0, 0.0, 1.0]),   # Up
+                    carb.input.GamepadInput.LEFT_TRIGGER:     np.array([0.0, 0.0, -1.0]),  # Down
+                },
+                scale=20.0 
+            )
+            
+            self._joy_torque = gamepad_cmd(
+                input_mapping={
+                    # Pitch
+                    carb.input.GamepadInput.RIGHT_STICK_UP:    np.array([0.0, -1.0, 0.0]), 
+                    carb.input.GamepadInput.RIGHT_STICK_DOWN:  np.array([0.0, 1.0, 0.0]),
+                    # Yaw
+                    carb.input.GamepadInput.RIGHT_STICK_LEFT:  np.array([0.0, 0.0, 1.0]),
+                    carb.input.GamepadInput.RIGHT_STICK_RIGHT: np.array([0.0, 0.0, -1.0]),
+                    # Roll (Optional, maybe on D-Pad)
+                    carb.input.GamepadInput.DPAD_LEFT:         np.array([-1.0, 0.0, 0.0]),
+                    carb.input.GamepadInput.DPAD_RIGHT:        np.array([1.0, 0.0, 0.0]),
+                },
+                scale=10.0
+            )
         elif ctrl_mode == "ROS control":
             self._rob_forceAPI = PhysxSchema.PhysxForceAPI.Apply(self._rob)
 
@@ -193,6 +222,8 @@ class MHL_Sensor_Example_Scenario():
         if self._ctrl_mode=="Manual control":
             self._force_cmd.cleanup()
             self._torque_cmd.cleanup()
+            self._joy_force.cleanup()
+            self._joy_torque.cleanup()
 
         # clear the ROS2 control receiver
         if self._ros2_control_receiver is not None:
@@ -295,8 +326,20 @@ class MHL_Sensor_Example_Scenario():
             self._baro_reading = self._baro.get_pressure()
 
         if self._ctrl_mode=="Manual control":
-            force_cmd = Gf.Vec3f(*self._force_cmd._base_command)
-            torque_cmd = Gf.Vec3f(*self._torque_cmd._base_command)
+            # Get Keyboard inputs
+            kb_force = self._force_cmd._base_command
+            kb_torque = self._torque_cmd._base_command
+            
+            # Get Joystick inputs
+            joy_force = self._joy_force._base_command
+            joy_torque = self._joy_torque._base_command
+
+            # Combine them (Summing them allows using both simultaneously)
+            total_force = kb_force + joy_force
+            total_torque = kb_torque + joy_torque
+
+            force_cmd = Gf.Vec3f(*total_force)
+            torque_cmd = Gf.Vec3f(*total_torque)
             self._rob_forceAPI.CreateForceAttr().Set(force_cmd)
             self._rob_forceAPI.CreateTorqueAttr().Set(torque_cmd)
         elif self._ctrl_mode=="Waypoints":
