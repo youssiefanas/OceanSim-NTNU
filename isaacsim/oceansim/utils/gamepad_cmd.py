@@ -44,7 +44,8 @@ class gamepad_cmd:
         self._current_values = {key: 0.0 for key in self._input_mapping}
 
         if self._gamepad:
-            print(f"[gamepad_cmd] Connected to gamepad: {self._input.get_input_device_name(self._gamepad)}")
+            device_name = getattr(self._gamepad, "name", "Unknown Gamepad")
+            print(f"[gamepad_cmd] Connected to gamepad: {device_name}")
             self._sub_gamepad = self._input.subscribe_to_gamepad_events(self._gamepad, self._sub_gamepad_event)
         else:
             print("[gamepad_cmd] No gamepad detected at index 0.")

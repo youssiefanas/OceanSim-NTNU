@@ -195,7 +195,7 @@ class UIBuilder():
                 self._ctrl_mode_model = dropdown_builder(
                     label='Control Mode',
                     default_val=3,
-                    items=['No control', 'Straight line', 'Waypoints', 'Manual control', 'ROS control'],
+                    items=['No control', 'Straight line', 'Waypoints', 'Manual control', 'ROS control', 'ROS + Manual control'],
                     tooltip='Select preferred control mode',
                     on_clicked_fn=self._on_ctrl_mode_dropdown_clicked
                 )
@@ -313,7 +313,7 @@ class UIBuilder():
             
         # add bluerov robot as reference
         robot_prim_path = "/World/rob"
-        robot_usd_path = get_oceansim_assets_path() + "/Bluerov/BROV_IMU.usd"
+        robot_usd_path = get_oceansim_assets_path() + "/Bluerov/BROV_low.usd"
         self._rob = add_reference_to_stage(usd_path=robot_usd_path, prim_path=robot_prim_path)
         # Toggle rigid body and collider preset for robot, and set zero gravity to mimic underwater environment
         rob_rigidBody_API = PhysxSchema.PhysxRigidBodyAPI.Apply(get_prim_at_path(robot_prim_path))
@@ -512,7 +512,7 @@ class UIBuilder():
             else:
                 self.waypoints_frame.visible = False
         with self.ros2_control_frame:
-            if self._ctrl_mode == 'ROS control':
+            if self._ctrl_mode == 'ROS control' or self._ctrl_mode == 'ROS + Manual control':
                 # Build the ROS2 control UI
                 self._build_ros2_control_ui()
                 self.ros2_control_frame.visible = True

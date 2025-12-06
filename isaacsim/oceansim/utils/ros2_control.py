@@ -278,7 +278,7 @@ class ROS2ControlReceiver:
         self.linear_vel = [0.0, 0.0, 0.0]
         self.angular_vel = [0.0, 0.0, 0.0]
 
-        rclpy.shutdown()
+        # rclpy.shutdown()
 
         print(f'[{self._name}] ROS2_Control_receiver closed.') 
 

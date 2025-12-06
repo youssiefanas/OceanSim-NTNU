@@ -61,6 +61,10 @@ class MHL_Sensor_Example_Scenario():
         self._timeline = omni.timeline.get_timeline_interface()
 
     def setup_scenario(self, rob, sonar, cam, DVL, baro, IMU, ctrl_mode):
+        if not rclpy.ok():
+            print("[Scenario] ROS2 Context was dead. Resurrecting before sensor init...")
+            rclpy.init()
+
         self._rob = rob
         self._sonar = sonar
         self._cam = cam
@@ -86,7 +90,7 @@ class MHL_Sensor_Example_Scenario():
                 'physics_step':        0    
             }        
         # Apply the physx force schema if manual control
-        if ctrl_mode == "Manual control":
+        if ctrl_mode == "Manual control" or ctrl_mode == "ROS + Manual control":
             from ...utils.keyboard_cmd import keyboard_cmd
             from ...utils.gamepad_cmd import gamepad_cmd
             import carb.input
@@ -143,13 +147,14 @@ class MHL_Sensor_Example_Scenario():
                     # Yaw
                     carb.input.GamepadInput.RIGHT_STICK_LEFT:  np.array([0.0, 0.0, 1.0]),
                     carb.input.GamepadInput.RIGHT_STICK_RIGHT: np.array([0.0, 0.0, -1.0]),
-                    # Roll (Optional, maybe on D-Pad)
-                    carb.input.GamepadInput.DPAD_LEFT:         np.array([-1.0, 0.0, 0.0]),
-                    carb.input.GamepadInput.DPAD_RIGHT:        np.array([1.0, 0.0, 0.0]),
+                    # Roll
+                    carb.input.GamepadInput.LEFT_SHOULDER:     np.array([-1.0, 0.0, 0.0]),
+                    carb.input.GamepadInput.RIGHT_SHOULDER:    np.array([1.0, 0.0, 0.0]),
                 },
                 scale=10.0
             )
-        elif ctrl_mode == "ROS control":
+
+        if ctrl_mode == "ROS control" or ctrl_mode == "ROS + Manual control":
             self._rob_forceAPI = PhysxSchema.PhysxForceAPI.Apply(self._rob)
 
             # initialize ROS2ControlReceiver
@@ -217,13 +222,15 @@ class MHL_Sensor_Example_Scenario():
             self._sonar.close()
         if self._cam is not None:
             self._cam.close()
+        if self._IMU is not None:
+            self._IMU.close()
 
         # clear the keyboard subscription
-        if self._ctrl_mode=="Manual control":
+        if self._ctrl_mode=="Manual control" or self._ctrl_mode=="ROS + Manual control":
             self._force_cmd.cleanup()
             self._torque_cmd.cleanup()
-            self._joy_force.cleanup()
-            self._joy_torque.cleanup()
+            # self._joy_force.cleanup()
+            # self._joy_torque.cleanup()
 
         # clear the ROS2 control receiver
         if self._ros2_control_receiver is not None:
@@ -325,7 +332,9 @@ class MHL_Sensor_Example_Scenario():
         if self._baro is not None:
             self._baro_reading = self._baro.get_pressure()
 
-        if self._ctrl_mode=="Manual control":
+        if self._ctrl_mode=="Manual control" or self._ctrl_mode=="ROS + Manual control":
+            if self._ctrl_mode=="ROS + Manual control" and self._ros2_control_receiver is not None:
+                    self._ros2_control_receiver.update_control()
             # Get Keyboard inputs
             kb_force = self._force_cmd._base_command
             kb_torque = self._torque_cmd._base_command

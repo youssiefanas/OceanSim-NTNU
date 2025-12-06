@@ -3,6 +3,7 @@ from sensor_msgs.msg import Imu
 from geometry_msgs.msg import Quaternion, Vector3
 import numpy as np
 import rclpy
+import carb
 import time
 
 class IMU(IMUSensor):
@@ -114,6 +115,8 @@ class IMU(IMUSensor):
 
         if self._enable_ros2_pub:
             self._ros2_publish_imu(imu_data)
+        else:
+            carb.log_error('Not publishing IMU data')
 
         return imu_data
 
@@ -121,10 +124,12 @@ class IMU(IMUSensor):
                     enable_ros2_pub=True,
                     imu_topic="/oceansim/robot/imu",
                     ros2_pub_frequency=200,
-                    orientation_covariance=np.eye(9).reshape(-1) * 1e-6,
-                    angular_velocity_covariance=np.eye(9).reshape(-1) * 1e-4,
-                    linear_acceleration_covariance=np.eye(9).reshape(-1) * 1e-3,
+                    orientation_covariance=np.eye(3).reshape(-1) * 1e-6,
+                    angular_velocity_covariance=np.eye(3).reshape(-1) * 1e-4,
+                    linear_acceleration_covariance=np.eye(3).reshape(-1) * 1e-3,
                 ):
+        
+        carb.log_info('Initializing IMU...')
 
         self._orientation_covariance = orientation_covariance
         self._angular_velocity_covariance = angular_velocity_covariance
@@ -137,7 +142,7 @@ class IMU(IMUSensor):
         self._ros2_pub_frequency = ros2_pub_frequency     # publish frequency, hz
         self._setup_ros2_publisher()
         
-        print(f'[{self.name}] Initialized successfully.')
+        carb.log_info(f'[{self.name}] Initialized successfully.')
 
     def _setup_ros2_publisher(self):
         '''
@@ -222,7 +227,25 @@ class IMU(IMUSensor):
             # )
 
         except Exception as e:
-            print(f'[{self.name}] ROS2 IMU publish failed: {e}')
+            carb.log_error(f'[{self.name}] ROS2 IMU publish failed: {e}')
+
+    def close(self):
+        """Cleanup ROS2 node and publisher"""
+        try:
+            if self._enable_ros2_pub:
+                # Destroy publisher
+                if self._imu_pub is not None:
+                    self._ros2_imu_node.destroy_publisher(self._imu_pub)
+                    self._imu_pub = None
+                
+                # Destroy node
+                if self._ros2_imu_node is not None:
+                    self._ros2_imu_node.destroy_node()
+                    self._ros2_imu_node = None
+                
+            print(f'[{self.name}] ROS2 Node cleaned up.')
+        except Exception as e:
+            print(f'[{self.name}] Error cleaning up ROS2 node: {e}')
             
 # usage example:
 # imu_sensor = IMU(prim_path="/World/Robot/IMU", name="imu", frequency=100)
