@@ -4,7 +4,9 @@ from pxr import Gf, PhysxSchema
 import time
 import rclpy
 
-from geometry_msgs.msg import Quaternion, Vector3, Pose, PoseStamped
+from geometry_msgs.msg import Quaternion, Vector3, Pose, PoseStamped, TransformStamped
+from nav_msgs.msg import Path
+from tf2_ros import TransformBroadcaster
 
 # Isaac sim import
 from isaacsim.core.prims import SingleRigidPrim
@@ -57,6 +59,22 @@ class MHL_Sensor_Example_Scenario():
                 self._rob_pose_topic,
                 10
             )
+
+            # Path Publisher
+            self._path_topic = "/oceansim/robot/path"
+            self._path_pub = self._ros2_rob_pose_node.create_publisher(
+                Path,
+                self._path_topic,
+                10
+            )
+            self._path_msg = Path()
+            self._path_msg.header.frame_id = 'map' # Path is in map frame
+
+            self._last_path_pos = None
+            self._path_update_threshold = 0.05  # Only add point if moved self._path_update_threshold meters
+
+            # TF Broadcaster
+            self._tf_broadcaster = TransformBroadcaster(self._ros2_rob_pose_node)
 
         self._timeline = omni.timeline.get_timeline_interface()
 
@@ -136,7 +154,7 @@ class MHL_Sensor_Example_Scenario():
                     carb.input.GamepadInput.RIGHT_TRIGGER:    np.array([0.0, 0.0, 1.0]),   # Up
                     carb.input.GamepadInput.LEFT_TRIGGER:     np.array([0.0, 0.0, -1.0]),  # Down
                 },
-                scale=20.0 
+                scale=13.0 
             )
             
             self._joy_torque = gamepad_cmd(
@@ -151,7 +169,7 @@ class MHL_Sensor_Example_Scenario():
                     carb.input.GamepadInput.LEFT_SHOULDER:     np.array([-1.0, 0.0, 0.0]),
                     carb.input.GamepadInput.RIGHT_SHOULDER:    np.array([1.0, 0.0, 0.0]),
                 },
-                scale=10.0
+                scale=8.0
             )
 
         if ctrl_mode == "ROS control" or ctrl_mode == "ROS + Manual control":
@@ -303,6 +321,39 @@ class MHL_Sensor_Example_Scenario():
             
             # Publish the message
             self._rob_pose_pub.publish(msg)
+
+            # Publish TF (Transform from 'map' to 'base_link')
+            tf_msg = TransformStamped()
+            tf_msg.header.stamp = msg.header.stamp
+            tf_msg.header.frame_id = 'map'
+            tf_msg.child_frame_id = 'base_link' # Assuming robot frame is base_link
+
+            tf_msg.transform.translation.x = msg.pose.position.x
+            tf_msg.transform.translation.y = msg.pose.position.y
+            tf_msg.transform.translation.z = msg.pose.position.z
+            tf_msg.transform.rotation = msg.pose.orientation
+
+            self._tf_broadcaster.sendTransform(tf_msg)
+
+            # Publish Path (Full trajectory)
+            current_pos_np = np.array([msg.pose.position.x, msg.pose.position.y, msg.pose.position.z])
+            update_path = False
+            if self._last_path_pos is None:
+                update_path = True
+            else:
+                # Calculate distance moved
+                dist = np.linalg.norm(current_pos_np - self._last_path_pos)
+                if dist > self._path_update_threshold:
+                    update_path = True
+            
+            if update_path:
+                self._path_msg.header.stamp = msg.header.stamp
+                self._path_msg.poses.append(msg)
+                self._path_pub.publish(self._path_msg)
+                print(len(self._path_msg.poses))
+                
+                # Update tracker
+                self._last_path_pos = current_pos_np
 
         # IMU UPDATE (Fast - 200 Hz)
         # We ALWAYS update the IMU every physics step
