@@ -52,12 +52,12 @@ class IMU(IMUSensor):
         )
 
         # 1. Noise Density (White Noise)
-        self.gyro_noise_density = 1.0e-4  # rad/s / sqrt(Hz)
-        self.accel_noise_density = 1.0e-3 # m/s^2 / sqrt(Hz)
+        self.gyro_noise_density = 0.00016  # rad/s / sqrt(Hz)
+        self.accel_noise_density = 0.0028 # m/s^2 / sqrt(Hz)
         
         # 2. Random Walk (Bias)
-        self.Eb_gyro = 1.0e-5
-        self.Eb_acc = 1.0e-4
+        self.gyro_walk = 0.000022
+        self.acc_walk = 0.00086
 
         # Initialize Bias accumulation vectors
         self.current_gyro_bias = np.zeros(3)
@@ -72,8 +72,8 @@ class IMU(IMUSensor):
         """
         # 1. Update Random Walk Bias (WIener process)
         # Bias changes by: RandomStep * sqrt(dt)
-        self.current_gyro_bias += np.random.normal(0, self.Eb_gyro * np.sqrt(dt), 3)
-        self.current_accel_bias += np.random.normal(0, self.Eb_acc * np.sqrt(dt), 3)
+        self.current_gyro_bias += np.random.normal(0, self.gyro_walk * np.sqrt(dt), 3)
+        self.current_accel_bias += np.random.normal(0, self.acc_walk * np.sqrt(dt), 3)
 
         # 2. Calculate White Noise Standard Deviation for this step
         # Sigma_discrete = Density * (1 / sqrt(dt))
@@ -124,9 +124,9 @@ class IMU(IMUSensor):
                     enable_ros2_pub=True,
                     imu_topic="/oceansim/robot/imu",
                     ros2_pub_frequency=200,
-                    orientation_covariance=np.eye(3).reshape(-1) * 1e-6,
-                    angular_velocity_covariance=np.eye(3).reshape(-1) * 1e-4,
-                    linear_acceleration_covariance=np.eye(3).reshape(-1) * 1e-3,
+                    orientation_covariance=np.zeros((3,3)).reshape(-1) * 1e-6,
+                    angular_velocity_covariance=np.zeros((3,3)).reshape(-1) * 1e-4,
+                    linear_acceleration_covariance=np.zeros((3,3)).reshape(-1) * 1e-3,
                 ):
         
         carb.log_info('Initializing IMU...')

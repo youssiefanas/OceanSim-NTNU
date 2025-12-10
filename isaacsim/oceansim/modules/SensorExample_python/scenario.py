@@ -1,6 +1,6 @@
 # Omniverse import
 import numpy as np
-from pxr import Gf, PhysxSchema
+from pxr import Gf, PhysxSchema, UsdGeom, Usd, UsdPhysics
 import time
 import rclpy
 
@@ -13,6 +13,12 @@ from isaacsim.core.prims import SingleRigidPrim
 from isaacsim.core.utils.prims import get_prim_path
 import omni.timeline
 
+from isaacsim.asset.gen.omap.bindings import _omap
+
+from isaacsim.core.utils.extensions import enable_extension
+enable_extension("isaacsim.util.debug_draw")
+from isaacsim.util.debug_draw import _debug_draw
+
 # ROS Control import
 try:
     from isaacsim.oceansim.utils.ros2_control import ROS2ControlReceiver
@@ -24,7 +30,7 @@ except ImportError as e:
     print("[Scenario] ROS2 Control functionality will be disabled")
 
 class MHL_Sensor_Example_Scenario():
-    def __init__(self, publish_pose=True):
+    def __init__(self, publish_pose=True, publish_map=False):
         self._rob = None
         self._sonar = None
         self._cam = None
@@ -44,6 +50,7 @@ class MHL_Sensor_Example_Scenario():
 
         self._rob_pose_topic = "/oceansim/robot/pose"
         self._publish_pose = publish_pose
+        self._publish_map = publish_map
 
         # Initialize ROS2 context if not already done
         if not rclpy.ok():
@@ -76,6 +83,17 @@ class MHL_Sensor_Example_Scenario():
             # TF Broadcaster
             self._tf_broadcaster = TransformBroadcaster(self._ros2_rob_pose_node)
 
+            if self._publish_map:
+                self._omap_generator = None
+                self._last_omap_pos = None
+                self._omap_update_threshold = 0.5
+                
+                # Initialize Debug Draw interface (Safe to do here)
+                if _debug_draw is not None:
+                    self._debug_draw = _debug_draw.acquire_debug_draw_interface()
+                else:
+                    self._debug_draw = None
+
         self._timeline = omni.timeline.get_timeline_interface()
 
     def setup_scenario(self, rob, sonar, cam, DVL, baro, IMU, ctrl_mode):
@@ -93,7 +111,7 @@ class MHL_Sensor_Example_Scenario():
         if self._sonar is not None:
             self._sonar.sonar_initialize(include_unlabelled=True)
         if self._cam is not None:
-            self._cam.initialize()
+            self._cam.initialize()#UW_yaml_path='/home/osim-mir/OceanSimAssets/water_params_test.yaml')#, writing_dir="/home/osim-mir/OceanSimAssets/GroundTruth")
         if self._DVL is not None:
             self._DVL_reading = [0.0, 0.0, 0.0]
         if self._baro is not None:
@@ -106,7 +124,30 @@ class MHL_Sensor_Example_Scenario():
                 'orientation':         np.array([1.0, 0.0, 0.0, 0.0]),
                 'time':                0.0,
                 'physics_step':        0    
-            }        
+            }
+
+        try:
+            self._physx_interface = omni.physx.acquire_physx_interface()
+            self._stage_id = omni.usd.get_context().get_stage_id()
+            
+            # Check if PhysicsScene exists (Optional safety check)
+            stage = omni.usd.get_context().get_stage()
+            has_physics_scene = False
+            for prim in stage.Traverse():
+                if prim.IsA(UsdPhysics.Scene):
+                    has_physics_scene = True
+                    break
+            
+            if has_physics_scene:
+                self._omap_generator = _omap.Generator(self._physx_interface, self._stage_id)
+                self._omap_generator.update_settings(0.2, 4, 5, 6)
+                print("[Scenario] Occupancy Map Generator Initialized.")
+            else:
+                print("[Scenario] WARNING: No PhysicsScene found on stage. OMap disabled.")
+        except Exception as e:
+            print(f"[Scenario] Failed to init OMap Generator: {e}")
+            self._omap_generator = None
+
         # Apply the physx force schema if manual control
         if ctrl_mode == "Manual control" or ctrl_mode == "ROS + Manual control":
             from ...utils.keyboard_cmd import keyboard_cmd
@@ -154,7 +195,7 @@ class MHL_Sensor_Example_Scenario():
                     carb.input.GamepadInput.RIGHT_TRIGGER:    np.array([0.0, 0.0, 1.0]),   # Up
                     carb.input.GamepadInput.LEFT_TRIGGER:     np.array([0.0, 0.0, -1.0]),  # Down
                 },
-                scale=13.0 
+                scale=9.0 
             )
             
             self._joy_torque = gamepad_cmd(
@@ -169,7 +210,7 @@ class MHL_Sensor_Example_Scenario():
                     carb.input.GamepadInput.LEFT_SHOULDER:     np.array([-1.0, 0.0, 0.0]),
                     carb.input.GamepadInput.RIGHT_SHOULDER:    np.array([1.0, 0.0, 0.0]),
                 },
-                scale=8.0
+                scale=4.0
             )
 
         if ctrl_mode == "ROS control" or ctrl_mode == "ROS + Manual control":
@@ -350,10 +391,56 @@ class MHL_Sensor_Example_Scenario():
                 self._path_msg.header.stamp = msg.header.stamp
                 self._path_msg.poses.append(msg)
                 self._path_pub.publish(self._path_msg)
-                print(len(self._path_msg.poses))
                 
                 # Update tracker
                 self._last_path_pos = current_pos_np
+
+            if self._publish_map:
+                if self._debug_draw is not None and self._omap_generator is not None:
+                    update_omap = False
+                    
+                    # Check if this is the first run
+                    if self._last_omap_pos is None:
+                        update_omap = True
+                    else:
+                        # Check distance from last generation point
+                        dist_omap = np.linalg.norm(current_pos_np - self._last_omap_pos)
+                        if dist_omap > self._omap_update_threshold:
+                            update_omap = True
+                    
+                    if update_omap:
+                        # 1. Update Transform (Center on Robot)
+                        self._omap_generator.set_transform(
+                            (float(trans[0]), float(trans[1]), float(trans[2])), 
+                            (-2.0, -2.0, -2.0), 
+                            (2.0, 2.0, 2.0)
+                        )
+                        
+                        # Generate
+                        self._omap_generator.generate3d()
+                        
+                        # Get Points (These are in World Frame)
+                        raw_points = self._omap_generator.get_occupied_positions()
+                        print(raw_points)
+                        
+                        if len(raw_points) > 0:
+                            points_np = np.array(raw_points)
+                            
+                            # FILTER: Disregard points over the robot
+                            dist_to_robot = np.linalg.norm(points_np - current_pos_np, axis=1)
+                            mask = dist_to_robot > 0.6
+                            filtered_points = points_np[mask]
+
+                            # Draw
+                            if len(filtered_points) > 0:
+                                points_list = [tuple(p) for p in filtered_points]
+                                colors = [(1, 0, 0, 1)] * len(points_list) # Red
+                                sizes = [10.0] * len(points_list)
+                                
+                                self._debug_draw.draw_points(points_list, colors, sizes)
+                        
+                        # Update the last position tracker
+                        self._last_omap_pos = current_pos_np
 
         # IMU UPDATE (Fast - 200 Hz)
         # We ALWAYS update the IMU every physics step
@@ -384,8 +471,6 @@ class MHL_Sensor_Example_Scenario():
             self._baro_reading = self._baro.get_pressure()
 
         if self._ctrl_mode=="Manual control" or self._ctrl_mode=="ROS + Manual control":
-            if self._ctrl_mode=="ROS + Manual control" and self._ros2_control_receiver is not None:
-                    self._ros2_control_receiver.update_control()
             # Get Keyboard inputs
             kb_force = self._force_cmd._base_command
             kb_torque = self._torque_cmd._base_command
@@ -398,10 +483,21 @@ class MHL_Sensor_Example_Scenario():
             total_force = kb_force + joy_force
             total_torque = kb_torque + joy_torque
 
-            force_cmd = Gf.Vec3f(*total_force)
-            torque_cmd = Gf.Vec3f(*total_torque)
-            self._rob_forceAPI.CreateForceAttr().Set(force_cmd)
-            self._rob_forceAPI.CreateTorqueAttr().Set(torque_cmd)
+            user_is_controlling = np.linalg.norm(total_force) > 0.001 or np.linalg.norm(total_torque) > 0.001
+
+            if self._ctrl_mode=="ROS + Manual control" and self._ros2_control_receiver is not None and not user_is_controlling:
+                    self._ros2_control_receiver.update_control()
+
+            if user_is_controlling:
+                force_cmd = Gf.Vec3f(*total_force)
+                torque_cmd = Gf.Vec3f(*total_torque)
+                self._rob_forceAPI.CreateForceAttr().Set(force_cmd)
+                self._rob_forceAPI.CreateTorqueAttr().Set(torque_cmd)
+            else:
+                self._rob_forceAPI.CreateForceAttr().Set(Gf.Vec3f(0.0, 0.0, 0.0))
+                self._rob_forceAPI.CreateTorqueAttr().Set(Gf.Vec3f(0.0, 0.0, 0.0))
+                if self._ctrl_mode == "ROS + Manual control" and self._ros2_control_receiver is not None:
+                     self._ros2_control_receiver.update_control()
         elif self._ctrl_mode=="Waypoints":
             if len(self.waypoints) > 0:
                 waypoints = self.waypoints[0]

@@ -15,93 +15,76 @@ class UnderwaterInitPublisher(Node):
         self.timer = self.create_timer(self.timer_period, self.timer_callback)
         
         self.start_time = time.time()
-        self.get_logger().info('IMU Initialization Node Started.')
-        self.get_logger().info('Phase 0: DESCENDING to find visual features...')
+        self.get_logger().info('ORB-SLAM3 Initialization Node Started.')
+        self.get_logger().info('Strategy: Slower, smoother excitation.')
 
     def timer_callback(self):
         current_time = time.time()
         elapsed = current_time - self.start_time
         msg = Twist()
 
-        # --- PHASE 0: DESCENT (0 - 5 seconds) ---
-        # "Go down a bit" to find features.
-        # Assuming Z-up coordinate system (Standard ROS/Isaac), -Z is down.
-        if elapsed < 5.0:
-            msg.linear.x = 0.0
-            msg.linear.y = 0.0
-            msg.linear.z = -0.3  # Dive at 0.3 m/s (~1.5 meters depth)
-            msg.angular.z = 0.0
+        # --- PHASE 0: DESCENT (0 - 3 seconds) ---
+        # Increased time slightly to allow gentle settling
+        if elapsed < 3.0:
+            if elapsed < 0.1: self.get_logger().info('Phase 0: DESCENDING...')
+            msg.linear.z = -0.2  # Slower descent (was -0.3)
+            msg.linear.x = 0.05 
 
-        # --- PHASE 1: STATIC (5 - 15 seconds) ---
-        # Station Keeping for 10 seconds.
-        # Now that we (hopefully) see features, we stay still to capture biases.
-        elif elapsed < 15.0:
-            if elapsed < 5.1:
-                self.get_logger().info('Phase 1: STATIC (Station Keeping)...')
+        # --- PHASE 1: GENTLE WAKEUP (3 - 8 seconds) ---
+        # Very slow lateral sway to seed the map
+        elif elapsed < 8.0:
+            if elapsed < 3.1: self.get_logger().info('Phase 1: MAP SEEDING (Slow Lateral Move)...')
             
-            msg.linear.x = 0.0
-            msg.linear.y = 0.0
-            msg.linear.z = 0.0
-            msg.angular.z = 0.0
+            # Period = 10 seconds (Very slow)
+            msg.linear.y = 0.3 * math.sin(2 * math.pi * 0.1 * (elapsed - 3.0))
+            msg.linear.x = 0.1
+
+        # --- PHASE 2: THE "SLOW DANCE" (8 - 25 seconds) ---
+        # Slower frequencies for better tracking
+        elif elapsed < 60.0:
+            if elapsed < 8.1: self.get_logger().info('Phase 2: EXCITATION (Slow Figure-8)...')
+
+            t_dance = elapsed - 8.0
             
-        # --- PHASE 2: DYNAMIC EXCITATION (15 - 65 seconds) ---
-        # 50 seconds of active movement
-        elif elapsed < 65.0:
-            if elapsed < 15.1:
-                 self.get_logger().info('Phase 2: DYNAMIC (Excitation Maneuver)...')
-
-            # Reset dynamic timer so t=0 starts at 15s
-            t_dynamic = elapsed - 15.0
+            # --- Tuning Changes ---
+            # Previous: sin(2.0 * t) -> Period ~3.14s
+            # New:      sin(1.0 * t) -> Period ~6.28s (Twice as slow)
             
-            # --- Tuning Parameters ---
-            # Low frequency for smooth, observable motion
-            freq_sway = 0.1    
-            freq_heave = 0.1   
-            freq_yaw = 0.05    
-            
-            # High amplitude for good signal-to-noise ratio
-            amp_sway = 0.8     # m/s 
-            amp_heave = 0.4    # m/s 
-            amp_yaw = 0.3      # rad/s
+            # 1. TRANSLATION: The Slow Figure-8
+            msg.linear.y = 1.0 * math.sin(1.0 * t_dance)  # Sway Left/Right (Slow)
+            msg.linear.z = 0.5 * math.sin(2.0 * t_dance)  # Bob Up/Down (2x Sway freq)
 
-            # 1. Sway (Side-to-Side)
-            msg.linear.y = amp_sway * math.sin(2 * math.pi * freq_sway * t_dynamic)
+            # 2. ROTATION: Gentle Banking
+            # Reduced amplitude to prevent motion blur
+            msg.angular.x = -0.2 * math.cos(1.0 * t_dance) # Roll
+            msg.angular.y = 0.2 * math.sin(1.0 * t_dance) - 0.1 # Pitch (Tiny nod)
+            msg.angular.z = -0.2 * math.cos(1.0 * t_dance) # Yaw
 
-            # 2. Heave (Vertical Bobbing)
-            msg.linear.z = amp_heave * math.cos(2 * math.pi * freq_heave * t_dynamic)
-
-            # 3. Surge (Forward Crawl)
-            # Move forward to explore the map we just found
-            msg.linear.x = 0.2 
-
-            # 4. Yaw (Scanning)
-            msg.angular.z = amp_yaw * math.sin(2 * math.pi * freq_yaw * t_dynamic)
-
-        # --- FINISH ---
+        # --- PHASE 3: FINISH ---
         else:
+            if elapsed < 25.1: self.get_logger().info('Initialization Sequence Complete.')
             msg.linear.x = 0.0
             msg.linear.y = 0.0
             msg.linear.z = 0.0
+            msg.angular.x = 0.0
             msg.angular.z = 0.0
-            self.get_logger().info('Initialization Complete. Stopping.')
-            self.destroy_node()
-            return
+            msg.angular.y = 0.0
 
         self.publisher_.publish(msg)
 
 def main(args=None):
     if not rclpy.ok():
         rclpy.init(args=args)
-    
     node = UnderwaterInitPublisher()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass
     finally:
-        stop_msg = Twist()
-        node.publisher_.publish(stop_msg)
-        node.destroy_node()
+        if rclpy.ok():
+            node.publisher_.publish(Twist()) # Stop robot
+            node.destroy_node()
+            rclpy.shutdown()
 
 if __name__ == '__main__':
     main()

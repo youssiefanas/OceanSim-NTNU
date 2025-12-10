@@ -203,7 +203,7 @@ class UIBuilder():
                 self._load_btn = LoadButton(
                     "Load Button", "LOAD", setup_scene_fn=self._setup_scene, setup_post_load_fn=self._setup_scenario
                 )
-                self._load_btn.set_world_settings(physics_dt=1/self.physics_freq, rendering_dt=1/60.0)
+                self._load_btn.set_world_settings(physics_dt=1/self.physics_freq, rendering_dt=1/100.0)
                 self.wrapped_ui_elements.append(self._load_btn)
 
                 self._reset_btn = ResetButton(
@@ -283,15 +283,15 @@ class UIBuilder():
             print('USD path is empty. Default to example scene')
 
             # add MHL scene as reference
-            MHL_prim_path = '/World/mhl'
-            MHL_usd_path = get_oceansim_assets_path() + "/collected_MHL/mhl_scaled.usd"
+            MHL_prim_path = '/Root/scene'
+            MHL_usd_path = get_oceansim_assets_path() + "/collected_MHL/coral_reef.usd"
             add_reference_to_stage(usd_path=MHL_usd_path, prim_path=MHL_prim_path)
             # Toggle MHL mesh's collider
             SingleGeometryPrim(prim_path=MHL_prim_path, collision=True)
             # apply a reflectivity of 1.0 to mesh of the scene for sonar simulation
-            add_update_semantics(prim=get_prim_at_path(MHL_prim_path + "/Mesh/mesh"),
-                                type_label='reflectivity',
-                                semantic_label='1.0')
+            # add_update_semantics(prim=get_prim_at_path(MHL_prim_path + "/Mesh/mesh"),
+            #                     type_label='reflectivity',
+            #                     semantic_label='1.0')
             # Load the rock
             rock_prim_path = '/World/rock'
             rock_usd_path = get_oceansim_assets_path() + "/collected_rock/rock.usd"
@@ -350,7 +350,7 @@ class UIBuilder():
                                     translation=self._cam_trans)
             self._cam.set_focal_length(0.1 * self._cam_focal_length)
             self._cam.set_clipping_range(0.1, 100)
-            self._cam.set_frequency(int(self.physics_freq/10))
+            self._cam.set_frequency(int(20))
             
         if self._use_DVL:
             from isaacsim.oceansim.sensors.DVLsensor import DVLsensor

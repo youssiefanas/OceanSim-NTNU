@@ -9,6 +9,7 @@ import numpy as np
 import warp as wp
 import yaml
 import carb
+import os
 
 # Custom import
 from isaacsim.oceansim.utils.UWrenderer_utils import UW_render
@@ -101,6 +102,8 @@ class UW_Camera(Camera):
         self._viewport = viewport
         self._device = wp.get_preferred_device()
         super().initialize(physics_sim_view)
+
+        self._writing_dir = writing_dir
 
         if UW_yaml_path is not None:
             with open(UW_yaml_path, 'r') as file:
@@ -222,40 +225,60 @@ class UW_Camera(Camera):
             print(f'[{self._name}] ROS2 uw image publish failed: {e}')
 
     def render(self, sim_time=None):
-        """Process and display a single frame with underwater effects.
-    
-        Note:
-            - Updates viewport display if enabled
-            - Saves image to disk if writing_dir was specified
-        """
+        """Process and display a single frame with underwater effects."""
         try:
+            # 1. Get Data
             raw_rgba = self._rgba_annot.get_data(device="cuda")
-            depth = self._depth_annot.get_data()
-            if raw_rgba.size !=0:
+            depth = self._depth_annot.get_data() 
+            
+            # --- CRITICAL FIX: Ensure depth is on CPU for saving ---
+            # If depth is a Warp array (on GPU), move it to CPU memory (NumPy)
+            if hasattr(depth, "numpy"):
+                depth_data_cpu = depth.numpy()
+            elif hasattr(depth, "cpu"): # Some backend types use .cpu().numpy()
+                depth_data_cpu = depth.cpu().numpy()
+            else:
+                # If it's already a numpy array or unknown, use as is
+                depth_data_cpu = depth
+            # -------------------------------------------------------
+
+            if raw_rgba.size != 0:
+                # 2. Render Underwater Effect (Use the GPU 'depth' variable here for speed)
                 uw_image = wp.zeros_like(raw_rgba)
                 wp.launch(
                     dim=np.flip(self.get_resolution()),
                     kernel=UW_render,
                     inputs=[
                         raw_rgba,
-                        depth,
+                        depth, # Keep using the GPU variable for the kernel
                         self._backscatter_value,
                         self._atten_coeff,
                         self._backscatter_coeff
                     ],
-                    outputs=[
-                        uw_image
-                    ]
+                    outputs=[uw_image]
                 )  
                 
+                # 3. Viewport Update
                 if self._viewport:
                     self._provider.set_bytes_data_from_gpu(uw_image.ptr, self.get_resolution())
-                if self._writing:
+                
+                # 4. Data Writing
+                if self._writing and self._writing_backend:
+                    # Save RGB Image
                     self._writing_backend.schedule(write_image, path=f'UW_image_{self._id}.png', data=uw_image)
-                    print(f'[{self._name}] [{self._id}] Rendered image saved to {self._writing_backend.output_dir}')
+                    
+                    # Save Depth Data (Use the CPU variable 'depth_data_cpu' here)
+                    # We use os.path.join to ensure it goes to the correct folder
+                    depth_filename = f'Depth_{self._id}.npy'
+                    depth_full_path = os.path.join(self._writing_dir, depth_filename)
+                    
+                    self._writing_backend.schedule(np.save, file=depth_full_path, arr=depth_data_cpu)
+
+                    print(f'[{self._name}] [{self._id}] Saved RGB and Depth to {self._writing_dir}')
+                
+                # 5. ROS2 Publishing
                 if self._enable_ros2_pub:
                     self._ros2_publish_uw_img(uw_image, sim_time)
-                    pass
 
                 self._id += 1
 
