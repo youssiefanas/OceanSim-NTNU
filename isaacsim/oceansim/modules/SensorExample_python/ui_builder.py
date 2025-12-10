@@ -111,8 +111,6 @@ class UIBuilder():
         self._baro_event_sub = None
         self._IMU_event_sub_gyro = None  # <--- CORRECT NAME
         self._IMU_event_sub_accel = None # <--- CORRECT NAME
-        self._IMU_event_sub_gyro = None  # <--- CORRECT NAME
-        self._IMU_event_sub_accel = None # <--- CORRECT NAME
         for ui_elem in self.wrapped_ui_elements:
             ui_elem.cleanup()
         for frame in self.frames:
@@ -294,11 +292,6 @@ class UIBuilder():
         self._DVL_trans = np.array([0,0,-0.1])
         self._baro = None
         self._water_surface = 1.43389 # Arbitrary
-        self._IMU = None
-        self._IMU_trans = np.array([0, 0, 0])
-        self._IMU_orient = np.array([1, 0, 0, 0])
-
-
         self._IMU = None
         self._IMU_trans = np.array([0, 0, 0])
         self._IMU_orient = np.array([1, 0, 0, 0])
@@ -539,13 +532,6 @@ class UIBuilder():
         self._use_IMU = model or self._accel_check_box.get_value_as_bool()
         print('Reload the scene for changes to take effect.')
     
-    def _on_Accel_checkbox_click_fn(self, model):
-        self._use_IMU = model or self._gyro_check_box.get_value_as_bool()
-        print('Reload the scene for changes to take effect.')
-    def _on_Gyro_checkbox_click_fn(self, model):
-        self._use_IMU = model or self._accel_check_box.get_value_as_bool()
-        print('Reload the scene for changes to take effect.')
-    
     def _on_manual_ctrl_cb_click_fn(self, model):
         self._manual_ctrl = model
         print('Reload the scene for changes to take effect.')
@@ -568,11 +554,6 @@ class UIBuilder():
                 if self._use_baro is True:
                     self._build_baro_plot()
                     self.sensor_reading_frame.visible = True
-                if self._use_IMU is True:
-                    self._build_gyro_plot()
-                    self._build_accel_plot()
-                    self.sensor_reading_frame.visible = True
-                if not self._use_baro and not self._use_DVL and not self._use_IMU:
                 if self._use_IMU is True:
                     self._build_gyro_plot()
                     self._build_accel_plot()
