@@ -115,6 +115,7 @@ class MHL_Sensor_Example_Scenario():
         self._DVL = DVL
         self._baro = baro
         self._IMU = IMU
+        self._IMU = IMU
         self._ctrl_mode = ctrl_mode
         
         # Initialize ROS2 publishers for DVL and Barometer
@@ -371,6 +372,7 @@ class MHL_Sensor_Example_Scenario():
         self._cam = None
         self._DVL = None
         self._baro = None
+        self._IMU = None
         self._IMU = None
         self._running_scenario = False
         self._time = 0.0
