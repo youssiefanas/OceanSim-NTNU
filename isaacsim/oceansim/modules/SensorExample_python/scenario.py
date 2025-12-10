@@ -19,6 +19,8 @@ from isaacsim.core.utils.extensions import enable_extension
 enable_extension("isaacsim.util.debug_draw")
 from isaacsim.util.debug_draw import _debug_draw
 
+from isaacsim.oceansim.sensors.datacollection import DataCollectionSensor
+
 # ROS Control import
 try:
     from isaacsim.oceansim.utils.ros2_control import ROS2ControlReceiver
@@ -37,6 +39,10 @@ class MHL_Sensor_Example_Scenario():
         self._DVL = None
         self._baro = None
         self._IMU = None
+        self._data_collection_mode = False
+        self.data_collection_path = ""
+        self.waypoints_control_speed = False
+
 
         self._ctrl_mode = None
 
@@ -55,7 +61,7 @@ class MHL_Sensor_Example_Scenario():
         # Initialize ROS2 context if not already done
         if not rclpy.ok():
             rclpy.init()
-            print('[ROS2 context initialized')
+            print('ROS2 context initialized')
 
         if self._publish_pose:
             # Create pose publisher node
@@ -96,11 +102,13 @@ class MHL_Sensor_Example_Scenario():
 
         self._timeline = omni.timeline.get_timeline_interface()
 
-    def setup_scenario(self, rob, sonar, cam, DVL, baro, IMU, ctrl_mode):
+    def setup_scenario(self, rob, sonar, cam, DVL, baro, IMU, ctrl_mode,data_collection_mode, data_collection_path=""):
         if not rclpy.ok():
             print("[Scenario] ROS2 Context was dead. Resurrecting before sensor init...")
             rclpy.init()
 
+        self._data_collection_mode = data_collection_mode
+        self.data_collection_path = data_collection_path
         self._rob = rob
         self._sonar = sonar
         self._cam = cam
@@ -108,23 +116,64 @@ class MHL_Sensor_Example_Scenario():
         self._baro = baro
         self._IMU = IMU
         self._ctrl_mode = ctrl_mode
-        if self._sonar is not None:
-            self._sonar.sonar_initialize(include_unlabelled=True)
-        if self._cam is not None:
-            self._cam.initialize()#UW_yaml_path='/home/osim-mir/OceanSimAssets/water_params_test.yaml')#, writing_dir="/home/osim-mir/OceanSimAssets/GroundTruth")
+        
+        # Initialize ROS2 publishers for DVL and Barometer
         if self._DVL is not None:
-            self._DVL_reading = [0.0, 0.0, 0.0]
+            self._DVL.initialize_ros2()
+        
         if self._baro is not None:
-            self._baro_reading = 101325.0 # atmospheric pressure (Pa)
-        if self._IMU is not None:
-            self._IMU.initialize()
-            self._IMU_reading = {
-                'linear_acceleration': np.array([0.0, 0.0, 0.0]),
-                'angular_velocity':    np.array([0.0, 0.0, 0.0]),
-                'orientation':         np.array([1.0, 0.0, 0.0, 0.0]),
-                'time':                0.0,
-                'physics_step':        0    
-            }
+            self._baro.initialize_ros2()
+
+        # Data collection setup
+        if self._data_collection_mode:
+            self.setup_data_collection(data_path=self.data_collection_path)
+            if self._sonar is not None:
+                sensor_name = "sonar_sensor"
+                sensor_path = self._data_collector.collect_data(name=sensor_name)
+                self._sonar.sonar_initialize(include_unlabelled=True)
+            if self._cam is not None:
+                sensor_name = "camera_sensor"
+                sensor_path = self._data_collector.collect_data(name=sensor_name)
+                self._cam.initialize(writing_dir=sensor_path)#UW_yaml_path='/home/osim-mir/OceanSimAssets/water_params_test.yaml')#, )
+            if self._DVL is not None:
+                sensor_name = "DVL_sensor"
+                sensor_path = self._data_collector.collect_data(name=sensor_name)
+                self._DVL_reading = [0.0, 0.0, 0.0]
+            if self._baro is not None:
+                sensor_name = "barometer_sensor"
+                sensor_path = self._data_collector.collect_data(name=sensor_name)
+                self._baro_reading = 101325.0 # atmospheric pressure (Pa)
+            if self._IMU is not None:
+                sensor_name = "IMU_sensor"
+                sensor_path = self._data_collector.collect_data(name=sensor_name)
+                self._IMU.initialize()
+                self._IMU.save_metadata(save_path=sensor_path)
+                self._IMU.init_logging(save_path=sensor_path) # <--- Init CSV Logging
+                self._IMU_reading = {
+                    'linear_acceleration': np.array([0.0, 0.0, 0.0]),
+                    'angular_velocity':    np.array([0.0, 0.0, 0.0]),
+                    'orientation':         np.array([1.0, 0.0, 0.0, 0.0]),
+                    'time':                0.0,
+                    'physics_step':        0    
+                }
+        else:
+            if self._sonar is not None:
+                self._sonar.sonar_initialize(include_unlabelled=True)
+            if self._cam is not None:
+                self._cam.initialize()#UW_yaml_path='/home/osim-mir/OceanSimAssets/water_params_test.yaml')#, writing_dir="/home/osim-mir/OceanSimAssets/GroundTruth")
+            if self._DVL is not None:
+                self._DVL_reading = [0.0, 0.0, 0.0]
+            if self._baro is not None:
+                self._baro_reading = 101325.0 # atmospheric pressure (Pa)
+            if self._IMU is not None:
+                self._IMU.initialize()
+                self._IMU_reading = {
+                    'linear_acceleration': np.array([0.0, 0.0, 0.0]),
+                    'angular_velocity':    np.array([0.0, 0.0, 0.0]),
+                    'orientation':         np.array([1.0, 0.0, 0.0, 0.0]),
+                    'time':                0.0,
+                    'physics_step':        0    
+                }
 
         try:
             self._physx_interface = omni.physx.acquire_physx_interface()
@@ -272,6 +321,19 @@ class MHL_Sensor_Example_Scenario():
             self.waypoints = read_data_from_file(default_waypoint_path)
             print('Fail to load this waypoints. Back to default waypoints.')
 
+    def setup_data_collection(self, data_path):
+        if data_path is None or data_path=="":
+            data_path = "/home/osim-mir/data_collected_oceansim"
+        else:
+            data_path = data_path
+        self.data_collection_path = data_path
+        try:
+            self._data_collector = DataCollectionSensor(data_path=self.data_collection_path)
+        except Exception as e:
+            print(f"[Scenario] Error initializing DataCollectionSensor: {e}")
+            import traceback
+            traceback.print_exc()
+
         
     def teardown_scenario(self):
 
@@ -283,6 +345,15 @@ class MHL_Sensor_Example_Scenario():
             self._cam.close()
         if self._IMU is not None:
             self._IMU.close()
+        
+        if self._DVL is not None:
+             self._DVL.cleanup()
+             
+        if self._baro is not None:
+             self._baro.cleanup()
+        
+        # Reset simple variables
+        self._time = 0.0
 
         # clear the keyboard subscription
         if self._ctrl_mode=="Manual control" or self._ctrl_mode=="ROS + Manual control":
@@ -446,6 +517,14 @@ class MHL_Sensor_Example_Scenario():
         # We ALWAYS update the IMU every physics step
         if self._IMU is not None:
             self._IMU_reading = self._IMU.get_imu_data()
+            
+            # Log data if in collection mode
+            if self._data_collection_mode:
+                self._IMU.log_data(
+                    timestamp=self._time,
+                    accel=self._IMU_reading['linear_acceleration'],
+                    gyro=self._IMU_reading['angular_velocity']
+                )
 
         # CAMERA UPDATE (Slow - 20 Hz)
         # We only render if enough SIMULATION time has passed.
@@ -466,9 +545,17 @@ class MHL_Sensor_Example_Scenario():
         if self._sonar is not None:
             self._sonar.make_sonar_data()
         if self._DVL is not None:
-            self._DVL_reading = self._DVL.get_linear_vel()
+            new_dvl_reading = self._DVL.get_linear_vel_fd(step)
+            # Only update if we have a valid reading (not NaN)
+            if not np.any(np.isnan(new_dvl_reading)):
+                 self._DVL_reading = new_dvl_reading
+                 self._DVL.publish_ros2(self._time, self._DVL_reading)
+
+        # BARO UPDATE (Fast - 200 Hz)
         if self._baro is not None:
             self._baro_reading = self._baro.get_pressure()
+            # Publish to ROS2
+            self._baro.publish_ros2(self._time, self._baro_reading)
 
         if self._ctrl_mode=="Manual control" or self._ctrl_mode=="ROS + Manual control":
             # Get Keyboard inputs
@@ -499,13 +586,44 @@ class MHL_Sensor_Example_Scenario():
                 if self._ctrl_mode == "ROS + Manual control" and self._ros2_control_receiver is not None:
                      self._ros2_control_receiver.update_control()
         elif self._ctrl_mode=="Waypoints":
-            if len(self.waypoints) > 0:
-                waypoints = self.waypoints[0]
-                self._rob.GetAttribute('xformOp:translate').Set(Gf.Vec3f(waypoints[0], waypoints[1], waypoints[2]))
-                self._rob.GetAttribute('xformOp:orient').Set(Gf.Quatd(waypoints[3], waypoints[4], waypoints[5], waypoints[6]))
-                self.waypoints.pop(0)
+            if self.waypoints_control_speed:
+                SPEED = 0.01  # How much to move per frame (0.0 to 1.0)
+                ROT_SPEED = 0.01
+                THRESHOLD = 0.1 # Distance units to consider "arrived"
+                if len(self.waypoints) > 0:
+                    target_data = self.waypoints[0]
+                    target_pos = Gf.Vec3d(target_data[0], target_data[1], target_data[2])
+                    target_rot = Gf.Quatd(target_data[3], target_data[4], target_data[5], target_data[6])
+
+                    current_pos_attr = self._rob.GetAttribute('xformOp:translate')
+                    current_rot_attr = self._rob.GetAttribute('xformOp:orient')
+                    
+                    current_pos = current_pos_attr.Get()
+                    current_rot = current_rot_attr.Get()
+
+                    new_pos = current_pos + (target_pos - current_pos) * SPEED
+                    
+                    new_rot = Gf.Slerp(ROT_SPEED, current_rot, target_rot)
+
+                    current_pos_attr.Set(new_pos)
+                    current_rot_attr.Set(new_rot)
+                    
+                    distance_vector = target_pos - current_pos
+                    distance = distance_vector.GetLength()
+                    if distance < THRESHOLD:
+                        self.waypoints.pop(0)
+                else:
+                    print('Waypoints finished')  
             else:
-                print('Waypoints finished')                
+                if len(self.waypoints) > 0:
+                    waypoints = self.waypoints[0]
+                    self._rob.GetAttribute('xformOp:translate').Set(Gf.Vec3f(waypoints[0], waypoints[1], waypoints[2]))
+                    self._rob.GetAttribute('xformOp:orient').Set(Gf.Quatd(waypoints[3], waypoints[4], waypoints[5], waypoints[6]))
+                    self.waypoints.pop(0)
+                else:
+                    print('Waypoints finished')
+                    
+              
         elif self._ctrl_mode=="Straight line":
             SingleRigidPrim(prim_path=get_prim_path(self._rob)).set_linear_velocity(np.array([0.5,0,0])) 
         elif self._ctrl_mode=="ROS control":

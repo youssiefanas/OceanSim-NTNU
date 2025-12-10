@@ -135,7 +135,16 @@ class UW_Camera(Camera):
 
         if writing_dir is not None:
             self._writing = True
-            self._writing_backend = rep.BackendDispatch({"paths": {"out_dir": writing_dir}})
+            writing_dir_RGB = os.path.join(writing_dir, 'RGB')
+            if not os.path.exists(writing_dir_RGB):
+                os.makedirs(writing_dir_RGB)
+            self._writing_dir_RGB = writing_dir_RGB
+            writing_dir_depth =  os.path.join(writing_dir, 'Depth')
+            if not os.path.exists(writing_dir_depth):
+                os.makedirs(writing_dir_depth)
+            self._writing_dir_depth = writing_dir_depth
+            self._writing_backend_RGB = rep.BackendDispatch({"paths": {"out_dir": writing_dir_RGB}})
+            self._writing_backend_depth = rep.BackendDispatch({"paths": {"out_dir": writing_dir_depth}})
 
         # ROS2 configuration
         self._enable_ros2_pub = enable_ros2_pub
@@ -263,18 +272,18 @@ class UW_Camera(Camera):
                     self._provider.set_bytes_data_from_gpu(uw_image.ptr, self.get_resolution())
                 
                 # 4. Data Writing
-                if self._writing and self._writing_backend:
+                if self._writing and self._writing_backend_RGB is not None and self._writing_backend_depth is not None:
                     # Save RGB Image
-                    self._writing_backend.schedule(write_image, path=f'UW_image_{self._id}.png', data=uw_image)
+                    self._writing_backend_RGB.schedule(write_image, path=f'UW_image_{self._id}.png', data=uw_image)
                     
                     # Save Depth Data (Use the CPU variable 'depth_data_cpu' here)
                     # We use os.path.join to ensure it goes to the correct folder
                     depth_filename = f'Depth_{self._id}.npy'
-                    depth_full_path = os.path.join(self._writing_dir, depth_filename)
+                    depth_full_path = os.path.join(self._writing_dir_depth, depth_filename)
                     
-                    self._writing_backend.schedule(np.save, file=depth_full_path, arr=depth_data_cpu)
+                    self._writing_backend_depth.schedule(np.save, file=depth_full_path, arr=depth_data_cpu)
 
-                    print(f'[{self._name}] [{self._id}] Saved RGB and Depth to {self._writing_dir}')
+                    # print(f'[{self._name}] [{self._id}] Saved RGB and Depth to {self._writing_dir}')
                 
                 # 5. ROS2 Publishing
                 if self._enable_ros2_pub:

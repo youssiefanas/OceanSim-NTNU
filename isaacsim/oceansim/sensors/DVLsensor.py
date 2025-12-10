@@ -14,6 +14,15 @@ from isaacsim.sensors.physx import _range_sensor
 # Custom import
 from isaacsim.oceansim.utils.MultivariateNormal import MultivariateNormal
 
+# ROS2 import
+import rclpy
+from geometry_msgs.msg import TwistStamped, Vector3
+try:
+    from geometry_msgs.msg import TwistWithCovarianceStamped
+    _HAS_COVARIANCE = True
+except ImportError:
+    _HAS_COVARIANCE = False
+
 
 class DVLsensor:
     def __init__(self,
@@ -87,6 +96,11 @@ class DVLsensor:
         self._beam_paths = []
         self._elapsed_time_vel = 0.0
         self._elapsed_time_depth = 0.0
+        
+        # ROS2
+        self._ros2_node = None
+        self._ros2_pub = None
+        self._enable_ros2 = False
 
         
         
@@ -370,6 +384,43 @@ class DVLsensor:
         self._user_static_freq_flag = True
         self._dt = 1 / freq
 
+    def initialize_ros2(self, node_name="dvl_node", topic_name="dvl/velocity"):
+        """Initialize ROS2 publisher."""
+        try:
+            if not rclpy.ok():
+                rclpy.init()
+            self._ros2_node = rclpy.create_node(node_name)
+            self._ros2_pub = self._ros2_node.create_publisher(TwistStamped, topic_name, 10)
+            self._enable_ros2 = True
+            print(f"[{self._name}] Initialized ROS2 publisher on topic: {topic_name}")
+        except Exception as e:
+            carb.log_error(f"[{self._name}] Failed to init ROS2: {e}")
+
+    def publish_ros2(self, timestamp, velocity):
+        """Publish DVL velocity data to ROS2."""
+        if not self._enable_ros2 or self._ros2_pub is None:
+            return
+
+        try:
+            msg = TwistStamped()
+            msg.header.stamp.sec = int(timestamp)
+            msg.header.stamp.nanosec = int((timestamp - int(timestamp)) * 1e9)
+            msg.header.frame_id = "dvl_link"
+            
+            # DVL measures linear velocity
+            msg.twist.linear = Vector3(x=float(velocity[0]), y=float(velocity[1]), z=float(velocity[2]))
+            
+            self._ros2_pub.publish(msg)
+            rclpy.spin_once(self._ros2_node, timeout_sec=0)
+            
+        except Exception as e:
+            carb.log_error(f"[{self._name}] Failed to publish ROS2: {e}")
+
+    def cleanup(self):
+        if self._ros2_node:
+            self._ros2_node.destroy_node()
+            self._ros2_node = None
+        
     def add_debug_lines(self):
         """Visualize DVL beams in the viewport using debug drawing.
         

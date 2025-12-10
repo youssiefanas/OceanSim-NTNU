@@ -1,6 +1,7 @@
 # Omniverse import
 import numpy as np
 import os
+import traceback
 import omni.timeline
 import omni.ui as ui
 from omni.usd import StageEventType
@@ -35,6 +36,13 @@ class UIBuilder():
         
         self._ctrl_mode = 'Manual control' #"ROS control" 
         self._waypoints_path = self._extension_path + '/demo/demo_waypoints.txt'
+        self._waypoints_path = self._extension_path + '/demo/demo_waypoints.txt'
+        self._data_collection_path = ""
+        
+        # Calculate IMU config path relative to this file
+        # ui_builder.py -> modules -> oceansim -> config/imu_config.yaml
+        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        self._imu_config_path = os.path.join(base_dir, "config", "imu_config.yaml")
         # Get access to the timeline to control stop/pause/play programmatically
         self._timeline = omni.timeline.get_timeline_interface()
 
@@ -47,6 +55,8 @@ class UIBuilder():
         self._on_init()
 
         self.physics_freq = 200.0 # Physics frequency in the simulator [Hz]
+
+        self._data_collection_mode = True
 
     ###################################################################################
     #           The Functions Below Are Called Automatically By extension.py
@@ -176,6 +186,17 @@ class UIBuilder():
                 )
                 self._use_IMU = False
                 self.wrapped_ui_elements.append(self.gyro_check_box)
+                #data collection mode checkbox
+                self._data_collection_mode = False
+                self.data_collection_check_box = CheckBox(
+                    "Data Collection Mode",
+                    default_value=False,
+                    tooltip=' Click this checkbox to activate data collection mode',
+                    on_click_fn=self._on_data_collection_cb_click_fn
+                )
+                
+
+
 
                 
         world_controls_frame = CollapsableFrame("World Controls", collapsed=False)
@@ -233,6 +254,19 @@ class UIBuilder():
         self.frames.append(self.waypoints_frame)
         self.ros2_control_frame = CollapsableFrame('ROS2 Control Mode Setting', collapsed=False, visible=False)
         self.frames.append(self.ros2_control_frame)
+        self.data_collection_frame = CollapsableFrame('Data Collection Settings', collapsed=False, visible=False)
+        self.frames.append(self.data_collection_frame)
+        with self.data_collection_frame:
+            # Pre-build the data collection path field here
+            self._data_save_path_field = str_builder(
+                label='Path to save data',
+                default_val="",
+                tooltip='Select the folder to save the collected sensor data',
+                use_folder_picker=True,
+                folder_button_title="Select Folder",
+                folder_dialog_title='Select the folder to save the collected sensor data'
+            )
+            self._data_save_path_field.add_value_changed_fn(self._on_data_save_path_changed_fn)
 
 
 
@@ -266,6 +300,7 @@ class UIBuilder():
         
         # Scenario
         self._scenario = MHL_Sensor_Example_Scenario()
+        
 
 
     def _setup_scene(self):
@@ -284,7 +319,7 @@ class UIBuilder():
 
             # add MHL scene as reference
             MHL_prim_path = '/Root/scene'
-            MHL_usd_path = get_oceansim_assets_path() + "/collected_MHL/coral_reef.usd"
+            MHL_usd_path = get_oceansim_assets_path() + "/collected_MHL/mhl_water.usd"
             add_reference_to_stage(usd_path=MHL_usd_path, prim_path=MHL_prim_path)
             # Toggle MHL mesh's collider
             SingleGeometryPrim(prim_path=MHL_prim_path, collision=True)
@@ -371,6 +406,7 @@ class UIBuilder():
             self._IMU = IMU(prim_path=robot_prim_path + '/IMU',
                             translation=self._IMU_trans,
                             orientation=self._IMU_orient,
+                            config_path=self._imu_config_path
                             )
             
 
@@ -391,7 +427,22 @@ class UIBuilder():
 
     def _reset_scenario(self):
         self._scenario.teardown_scenario()
-        self._scenario.setup_scenario(self._rob, self._sonar, self._cam, self._DVL, self._baro, self._IMU, self._ctrl_mode)
+        self._scenario.setup_scenario(
+            self._rob, 
+            self._sonar, 
+            self._cam, 
+            self._DVL, 
+            self._baro, 
+            self._IMU, 
+            self._ctrl_mode,
+            self._data_collection_mode,
+            data_collection_path=self._data_collection_path
+            )
+        self._scenario.setup_waypoints(
+            waypoint_path=self._waypoints_path, 
+            default_waypoint_path=self._extension_path + '/demo/demo_waypoints.txt'
+            )
+
     def _on_post_reset_btn(self):
         """
         This function is attached to the Reset Button as the post_reset_fn callback.
@@ -484,6 +535,10 @@ class UIBuilder():
     def _on_manual_ctrl_cb_click_fn(self, model):
         self._manual_ctrl = model
         print('Reload the scene for changes to take effect.')
+    def _on_data_collection_cb_click_fn(self, model):
+        self._data_collection_mode = model
+        self.data_collection_frame.visible = model
+        # print('Reload the scene for changes to take effect.')
 
     def _on_ctrl_mode_dropdown_clicked(self, model):
         self._ctrl_mode = model
@@ -505,6 +560,12 @@ class UIBuilder():
                     self.sensor_reading_frame.visible = True
                 if not self._use_baro and not self._use_DVL and not self._use_IMU:
                     self.sensor_reading_frame.visible = False 
+        with self.data_collection_frame:
+            # Move the UI creation to build_ui, here we just show/hide
+            if self._data_collection_mode:
+                self.data_collection_frame.visible = True
+            else:
+                self.data_collection_frame.visible = False
         with self.waypoints_frame:
             if self._ctrl_mode == 'Waypoints':
                 self._build_waypoints_filepicker()
@@ -560,6 +621,14 @@ class UIBuilder():
             waypoint_path=model.get_value_as_string(), 
             default_waypoint_path=self._extension_path + '/demo/demo_waypoints.txt'
             )
+    def _on_data_save_path_changed_fn(self, model):
+        # Just update the local path variable. We will pass it to scenario setup when LOAD is clicked.
+        try:
+            path = model.get_value_as_string()
+            self._data_collection_path = path
+            print('Data save path selected (will be used on Load): ', path)
+        except Exception:
+            traceback.print_exc()
 
     def _build_DVL_plot(self):
         self._DVL_event_sub = None
