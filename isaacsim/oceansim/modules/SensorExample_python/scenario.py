@@ -32,7 +32,7 @@ except ImportError as e:
     print("[Scenario] ROS2 Control functionality will be disabled")
 
 class MHL_Sensor_Example_Scenario():
-    def __init__(self, publish_pose=True, publish_map=False):
+    def __init__(self, publish_pose=False, publish_map=False):
         self._rob = None
         self._sonar = None
         self._cam = None
@@ -63,6 +63,7 @@ class MHL_Sensor_Example_Scenario():
             rclpy.init()
             print('ROS2 context initialized')
 
+        self._rob_pose_pub = None
         if self._publish_pose:
             # Create pose publisher node
             node_name = f'oceansim_rob_pose_pub'
@@ -134,7 +135,7 @@ class MHL_Sensor_Example_Scenario():
             if self._cam is not None:
                 sensor_name = "camera_sensor"
                 sensor_path = self._data_collector.collect_data(name=sensor_name)
-                self._cam.initialize(writing_dir=sensor_path)#UW_yaml_path='/home/osim-mir/OceanSimAssets/water_params_test.yaml')#, )
+                self._cam.initialize(writing_dir=sensor_path, ros2_pub_frequency=self._cam.get_frequency())#UW_yaml_path='/home/osim-mir/OceanSimAssets/water_params_test.yaml')#, )
             if self._DVL is not None:
                 sensor_name = "DVL_sensor"
                 sensor_path = self._data_collector.collect_data(name=sensor_name)
@@ -160,7 +161,7 @@ class MHL_Sensor_Example_Scenario():
             if self._sonar is not None:
                 self._sonar.sonar_initialize(include_unlabelled=True)
             if self._cam is not None:
-                self._cam.initialize()#UW_yaml_path='/home/osim-mir/OceanSimAssets/water_params_test.yaml')#, writing_dir="/home/osim-mir/OceanSimAssets/GroundTruth")
+                self._cam.initialize(ros2_pub_frequency=self._cam.get_frequency())#UW_yaml_path='/home/osim-mir/OceanSimAssets/water_params_test.yaml')#, writing_dir="/home/osim-mir/OceanSimAssets/GroundTruth")
             if self._DVL is not None:
                 self._DVL_reading = [0.0, 0.0, 0.0]
             if self._baro is not None:
@@ -396,8 +397,8 @@ class MHL_Sensor_Example_Scenario():
             print(f"Physics callback rate: {actual_hz:.1f} Hz")
             self._last_update_time = current_time
 
-        if self._rob_pose_pub is None:
-            return
+        # if self._rob_pose_pub is None:
+        #     return
 
         # fps control
         # current_time = time.time()
@@ -532,10 +533,8 @@ class MHL_Sensor_Example_Scenario():
         if not hasattr(self, '_last_cam_time'):
             self._last_cam_time = 0.0
         
-        TARGET_CAM_FPS = 20.0
-        
-        # Check if 0.05s (sim time) has passed since last render
-        if (self._time - self._last_cam_time) >= (1.0 / TARGET_CAM_FPS):
+        # Check if enough time (sim time) has passed since last render
+        if (self._time - self._last_cam_time) >= (1.0 / self._cam.get_frequency()):
             if self._cam is not None:
                 self._cam.render(sim_time=self._time)
             

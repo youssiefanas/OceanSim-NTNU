@@ -65,8 +65,13 @@ class IMU(IMUSensor):
         self.acc_walk = 0.00086
         
         # Initialize Bias accumulation vectors
+        self.init_gyro_bias = np.zeros(3)
+        self.init_accel_bias = np.zeros(3)
         self.current_gyro_bias = np.zeros(3)
         self.current_accel_bias = np.zeros(3)
+
+        # Track last time bias was updated to prevent double-update in single step
+        self._last_bias_update_time = -1.0
 
         if config_path and os.path.exists(config_path):
             self.load_config(config_path)
@@ -87,14 +92,16 @@ class IMU(IMUSensor):
                 self.accel_noise_density = acc.get('noise_density', self.accel_noise_density)
                 self.acc_walk = acc.get('random_walk', self.acc_walk)
                 init_bias = acc.get('bias_init', [0.0, 0.0, 0.0])
-                self.current_accel_bias = np.array(init_bias, dtype=np.float64)
+                self.init_accel_bias = np.array(init_bias, dtype=np.float64)
+                self.current_accel_bias = np.copy(self.init_accel_bias)
 
             if 'gyroscope' in config:
                 gyro = config['gyroscope']
                 self.gyro_noise_density = gyro.get('noise_density', self.gyro_noise_density)
                 self.gyro_walk = gyro.get('random_walk', self.gyro_walk)
                 init_bias = gyro.get('bias_init', [0.0, 0.0, 0.0])
-                self.current_gyro_bias = np.array(init_bias, dtype=np.float64)
+                self.init_gyro_bias = np.array(init_bias, dtype=np.float64)
+                self.current_gyro_bias = np.copy(self.init_gyro_bias)
 
             print(f"[{self.name}] Loaded configuration from {path}")
             print(f"   Accel Noise: {self.accel_noise_density}, Walk: {self.acc_walk}, Bias: {self.current_accel_bias}")
@@ -107,14 +114,19 @@ class IMU(IMUSensor):
         # Helper to track time for integration
         # self.last_step_time = None
 
-    def _add_noise(self, true_ang_vel, true_lin_acc, dt):
+    def _add_noise(self, true_ang_vel, true_lin_acc, dt, current_time):
         """
         Adds Gaussian white noise and Random Walk Bias to the raw sensor data.
+        Guards against multiple updates in the same simulation step.
         """
-        # 1. Update Random Walk Bias (WIener process)
-        # Bias changes by: RandomStep * sqrt(dt)
-        self.current_gyro_bias += np.random.normal(0, self.gyro_walk * np.sqrt(dt), 3)
-        self.current_accel_bias += np.random.normal(0, self.acc_walk * np.sqrt(dt), 3)
+        # 1. Update Random Walk Bias (Wiener process)
+        # Verify we haven't already updated for this timestep
+        if current_time > self._last_bias_update_time:
+            # Bias changes by: RandomStep * sqrt(dt)
+            self.current_gyro_bias += np.random.normal(0, self.gyro_walk * np.sqrt(dt), 3)
+            self.current_accel_bias += np.random.normal(0, self.acc_walk * np.sqrt(dt), 3)
+            
+            self._last_bias_update_time = current_time
 
         # 2. Calculate White Noise Standard Deviation for this step
         # Sigma_discrete = Density * (1 / sqrt(dt))
@@ -134,14 +146,18 @@ class IMU(IMUSensor):
             dict: A dictionary containing 'linear_acceleration', 'angular_velocity', and 'orientation'"""
         raw = self.get_current_frame(read_gravity=True)
 
-        dt = raw.get('physics_step')
-        if dt <= 0: dt = 0.005 # Fallback to avoid div/0
+        if self._frequency > 0:
+            dt = 1.0 / self._frequency
+        else:
+            dt = 0.005 # Fallback default 200Hz
+
+        current_time = raw.get('time')
 
         clean_ang_vel = np.array(raw['ang_vel'])
         clean_lin_acc = np.array(raw['lin_acc'])
 
         # Apply noise function
-        noisy_ang_vel, noisy_lin_acc = self._add_noise(clean_ang_vel, clean_lin_acc, dt)
+        noisy_ang_vel, noisy_lin_acc = self._add_noise(clean_ang_vel, clean_lin_acc, dt, current_time)
 
         imu_data = {
             'linear_acceleration': noisy_lin_acc,
@@ -171,6 +187,11 @@ class IMU(IMUSensor):
                 ):
         
         carb.log_info('Initializing IMU...')
+
+        # Reset Bias to Initial Configured Values
+        self.current_gyro_bias = np.copy(self.init_gyro_bias)
+        self.current_accel_bias = np.copy(self.init_accel_bias)
+        self._last_bias_update_time = -1.0
 
         self._orientation_covariance = orientation_covariance
         self._angular_velocity_covariance = angular_velocity_covariance
@@ -307,12 +328,12 @@ class IMU(IMUSensor):
                 "accelerometer": {
                     "noise_density": float(self.accel_noise_density),
                     "random_walk": float(self.acc_walk),
-                    "bias_init": self.current_accel_bias.tolist()
+                    "bias_init": self.init_accel_bias.tolist()
                 },
                 "gyroscope": {
                     "noise_density": float(self.gyro_noise_density),
                     "random_walk": float(self.gyro_walk),
-                    "bias_init": self.current_gyro_bias.tolist()
+                    "bias_init": self.init_gyro_bias.tolist()
                 },
                 "transform_to_body": transform_list
             }

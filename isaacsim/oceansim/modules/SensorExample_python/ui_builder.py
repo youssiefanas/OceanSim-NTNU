@@ -224,7 +224,7 @@ class UIBuilder():
                 self._load_btn = LoadButton(
                     "Load Button", "LOAD", setup_scene_fn=self._setup_scene, setup_post_load_fn=self._setup_scenario
                 )
-                self._load_btn.set_world_settings(physics_dt=1/self.physics_freq, rendering_dt=1/100.0)
+                self._load_btn.set_world_settings(physics_dt=1/self.physics_freq, rendering_dt=1/25.0)
                 self.wrapped_ui_elements.append(self._load_btn)
 
                 self._reset_btn = ResetButton(
@@ -385,7 +385,22 @@ class UIBuilder():
                                     translation=self._cam_trans)
             self._cam.set_focal_length(0.1 * self._cam_focal_length)
             self._cam.set_clipping_range(0.1, 100)
-            self._cam.set_frequency(int(20))
+            from omni.isaac.core import World
+
+            # 1. Get the singleton instance of the World
+            world = World.instance()
+
+            # 2. Get the rendering time step (dt)
+            # Note: This returns the 'rendering_dt' you set (e.g., 0.01)
+            render_dt = world.get_rendering_dt()
+
+            # 3. Calculate the frequency (Hz)
+            if render_dt is not None and render_dt > 0:
+                render_freq = 1.0 / render_dt
+                print(f"Rendering Frequency: {render_freq} Hz")
+                self._cam.set_frequency(int(render_freq))
+            else:
+                print("World is not initialized or rendering_dt is zero.")
             
         if self._use_DVL:
             from isaacsim.oceansim.sensors.DVLsensor import DVLsensor

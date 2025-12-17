@@ -78,7 +78,7 @@ class UW_Camera(Camera):
                    writing_dir: str = None,
                    UW_yaml_path: str = None,
                    physics_sim_view=None,
-                   enable_ros2_pub=True, uw_img_topic="/oceansim/robot/uw_img", ros2_pub_frequency=5, ros2_pub_jpeg_quality=50):
+                   enable_ros2_pub=True, uw_img_topic="/oceansim/robot/uw_img", ros2_pub_frequency=20, ros2_pub_jpeg_quality=50):
         
         """Configure underwater rendering properties and initialize pipelines.
     
@@ -191,7 +191,7 @@ class UW_Camera(Camera):
 
             # fps control
             current_time = time.time()
-            if current_time - self._last_publish_time < (1.0 / self._frequency):
+            if current_time - self._last_publish_time < (1.0 / self._ros2_pub_frequency):
                 return
 
             # Convert the image
@@ -238,19 +238,8 @@ class UW_Camera(Camera):
         try:
             # 1. Get Data
             raw_rgba = self._rgba_annot.get_data(device="cuda")
-            depth = self._depth_annot.get_data() 
+            depth = self._depth_annot.get_data(device="cuda") 
             
-            # --- CRITICAL FIX: Ensure depth is on CPU for saving ---
-            # If depth is a Warp array (on GPU), move it to CPU memory (NumPy)
-            if hasattr(depth, "numpy"):
-                depth_data_cpu = depth.numpy()
-            elif hasattr(depth, "cpu"): # Some backend types use .cpu().numpy()
-                depth_data_cpu = depth.cpu().numpy()
-            else:
-                # If it's already a numpy array or unknown, use as is
-                depth_data_cpu = depth
-            # -------------------------------------------------------
-
             if raw_rgba.size != 0:
                 # 2. Render Underwater Effect (Use the GPU 'depth' variable here for speed)
                 uw_image = wp.zeros_like(raw_rgba)
@@ -281,6 +270,14 @@ class UW_Camera(Camera):
                     depth_filename = f'Depth_{self._id}.npy'
                     depth_full_path = os.path.join(self._writing_dir_depth, depth_filename)
                     
+                    # Fetch depth to CPU only when needed
+                    if hasattr(depth, "numpy"):
+                         depth_data_cpu = depth.numpy()
+                    elif hasattr(depth, "cpu"): 
+                         depth_data_cpu = depth.cpu().numpy()
+                    else:
+                         depth_data_cpu = depth
+
                     self._writing_backend_depth.schedule(np.save, file=depth_full_path, arr=depth_data_cpu)
 
                     # print(f'[{self._name}] [{self._id}] Saved RGB and Depth to {self._writing_dir}')
