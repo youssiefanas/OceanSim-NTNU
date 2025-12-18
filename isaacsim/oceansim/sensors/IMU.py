@@ -119,23 +119,18 @@ class IMU(IMUSensor):
         Adds Gaussian white noise and Random Walk Bias to the raw sensor data.
         Guards against multiple updates in the same simulation step.
         """
-        # 1. Update Random Walk Bias (Wiener process)
+        # Update Random Walk Bias (Wiener process)
         # Verify we haven't already updated for this timestep
         if current_time > self._last_bias_update_time:
             # Bias changes by: RandomStep * sqrt(dt)
-            self.current_gyro_bias += np.random.normal(0, self.gyro_walk * np.sqrt(dt), 3)
-            self.current_accel_bias += np.random.normal(0, self.acc_walk * np.sqrt(dt), 3)
+            self.current_gyro_bias += np.random.normal(0, self.gyro_walk, 3)
+            self.current_accel_bias += np.random.normal(0, self.acc_walk, 3)
             
             self._last_bias_update_time = current_time
 
-        # 2. Calculate White Noise Standard Deviation for this step
-        # Sigma_discrete = Density * (1 / sqrt(dt))
-        gyro_sigma = self.gyro_noise_density * (1.0 / np.sqrt(dt))
-        accel_sigma = self.accel_noise_density * (1.0 / np.sqrt(dt))
-
-        # 3. Apply: Measurement = True + Bias + WhiteNoise
-        noisy_ang_vel = true_ang_vel + self.current_gyro_bias + np.random.normal(0, gyro_sigma, 3)
-        noisy_lin_acc = true_lin_acc + self.current_accel_bias + np.random.normal(0, accel_sigma, 3)
+        # Apply: Measurement = True + Bias + WhiteNoise
+        noisy_ang_vel = true_ang_vel + self.current_gyro_bias + np.random.normal(0, self.gyro_noise_density, 3)
+        noisy_lin_acc = true_lin_acc + self.current_accel_bias + np.random.normal(0, self.accel_noise_density, 3)
 
         return noisy_ang_vel, noisy_lin_acc
 

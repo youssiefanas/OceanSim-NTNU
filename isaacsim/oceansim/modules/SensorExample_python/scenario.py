@@ -4,7 +4,7 @@ from pxr import Gf, PhysxSchema, UsdGeom, Usd, UsdPhysics
 import time
 import rclpy
 
-from geometry_msgs.msg import Quaternion, Vector3, Pose, PoseStamped, TransformStamped
+from geometry_msgs.msg import Quaternion, Vector3, Pose, PoseStamped, TransformStamped, Wrench
 from nav_msgs.msg import Path
 from tf2_ros import TransformBroadcaster
 
@@ -32,7 +32,7 @@ except ImportError as e:
     print("[Scenario] ROS2 Control functionality will be disabled")
 
 class MHL_Sensor_Example_Scenario():
-    def __init__(self, publish_pose=False, publish_map=False):
+    def __init__(self, publish_pose=True, publish_map=False, publish_cmds=True):
         self._rob = None
         self._sonar = None
         self._cam = None
@@ -55,13 +55,26 @@ class MHL_Sensor_Example_Scenario():
         self._ros2_control_mode = "velocity control"
 
         self._rob_pose_topic = "/oceansim/robot/pose"
+        self._rob_cmd_topic = "/oceansim/robot/cmd"
         self._publish_pose = publish_pose
         self._publish_map = publish_map
+        self._publish_cmds = publish_cmds
 
         # Initialize ROS2 context if not already done
         if not rclpy.ok():
             rclpy.init()
             print('ROS2 context initialized')
+
+
+        if self._publish_cmds:
+            # Create commands publisher node
+            node_name = f'oceansim_rob_cmd_pub'
+            self._ros2_rob_cmd_node = rclpy.create_node(node_name)
+            self._rob_cmd_pub = self._ros2_rob_cmd_node.create_publisher(
+                Wrench,
+                self._rob_cmd_topic,
+                10
+            )
 
         self._rob_pose_pub = None
         if self._publish_pose:
@@ -579,6 +592,15 @@ class MHL_Sensor_Example_Scenario():
                 torque_cmd = Gf.Vec3f(*total_torque)
                 self._rob_forceAPI.CreateForceAttr().Set(force_cmd)
                 self._rob_forceAPI.CreateTorqueAttr().Set(torque_cmd)
+
+                msg = Wrench()
+                msg.force.x = force_cmd[0]
+                msg.force.y = force_cmd[1]
+                msg.force.z = force_cmd[2]
+                msg.torque.x = torque_cmd[0]
+                msg.torque.y = torque_cmd[1]
+                msg.torque.z = torque_cmd[2]
+                self._rob_cmd_pub.publish(msg)
             else:
                 self._rob_forceAPI.CreateForceAttr().Set(Gf.Vec3f(0.0, 0.0, 0.0))
                 self._rob_forceAPI.CreateTorqueAttr().Set(Gf.Vec3f(0.0, 0.0, 0.0))

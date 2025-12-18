@@ -222,6 +222,7 @@ class UW_Camera(Camera):
             rclpy.spin_once(self._ros2_uw_img_node, timeout_sec=0.0)
 
             self._last_publish_time = current_time
+            
 
             # debug
             # self._ros2_uw_img_node.get_logger().info(
@@ -335,6 +336,19 @@ class UW_Camera(Camera):
             self.ui_destroy()
             
         print(f'[{self._name}] Annotator detached. AnnotatorCache cleaned.')
+
+        # ROS2 cleanup
+        if self._enable_ros2_pub:
+            try:
+                if self._uw_img_pub:
+                    self._uw_img_pub.destroy()
+                    self._uw_img_pub = None
+                if self._ros2_uw_img_node:
+                    self._ros2_uw_img_node.destroy_node()
+                    self._ros2_uw_img_node = None
+                print(f'[{self._name}] ROS2 node and publisher destroyed.')
+            except Exception as e:
+                print(f'[{self._name}] ROS2 cleanup failed: {e}')
     
     
     def ui_destroy(self):

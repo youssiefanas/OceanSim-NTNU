@@ -22,7 +22,7 @@ from isaacsim.core.utils.extensions import get_extension_path
 # Custom import
 from .scenario import MHL_Sensor_Example_Scenario
 from .global_variables import EXTENSION_DESCRIPTION, EXTENSION_TITLE, EXTENSION_LINK
-from isaacsim.oceansim.utils.assets_utils import get_oceansim_assets_path
+from isaacsim.oceansim.utils.assets_utils import get_oceansim_assets_path, get_scene_path, load_config, get_assets_root
 
 class UIBuilder():
     def __init__(self):
@@ -317,38 +317,93 @@ class UIBuilder():
         else:
             print('USD path is empty. Default to example scene')
 
-            # add MHL scene as reference
-            MHL_prim_path = '/Root/scene'
-            MHL_usd_path = get_oceansim_assets_path() + "/collected_MHL/mhl_water.usd"
-            add_reference_to_stage(usd_path=MHL_usd_path, prim_path=MHL_prim_path)
-            # Toggle MHL mesh's collider
-            SingleGeometryPrim(prim_path=MHL_prim_path, collision=True)
-            # apply a reflectivity of 1.0 to mesh of the scene for sonar simulation
-            # add_update_semantics(prim=get_prim_at_path(MHL_prim_path + "/Mesh/mesh"),
-            #                     type_label='reflectivity',
-            #                     semantic_label='1.0')
-            # Load the rock
-            rock_prim_path = '/World/rock'
-            rock_usd_path = get_oceansim_assets_path() + "/collected_rock/rock.usd"
-            rock_prim = add_reference_to_stage(usd_path=rock_usd_path, prim_path=rock_prim_path)
-            # apply a reflectivity of 2.0 for sonar simulation
-            add_update_semantics(prim=get_prim_at_path(rock_prim_path+ '/Mesh/mesh'),
-                                type_label='reflectivity',
-                                semantic_label='2.0')
-            # Toggle collider for the rock
-            rock_collider_prim = SingleGeometryPrim(prim_path=rock_prim_path,
-                            collision=True)
-            # Set collision approximation using convexDecomposition to automatically compute inertia matrix
-            rock_collider_prim.set_collision_approximation('convexDecomposition')
-            # Toggle rigid body for the rock
-            rock_rigid_prim = SingleRigidPrim(prim_path=rock_prim_path,                          
-                                            translation=np.array([1.0, 0.1, -1.5]),
-                                            orientation=euler_angles_to_quat(np.array([0.0,0.0,90]), degrees=True), 
-                                            )
+            # Load environment elements from config
+            config = load_config()
+            environment = config.get("paths", {}).get("environment", [])
+            print(f"[DEBUG] Environment config: {environment}")
+            
+            if not environment:
+                print("[WARN] Environment list is empty or missing in config!")
+
+            for item in environment:
+                usd_path = os.path.join(get_assets_root(), item["usd_path"])
+                prim_path = item["prim_path"]
+                print(f"[DEBUG] Loading: {item['name']} | USD: {usd_path} | Prim: {prim_path}")
+                
+                # Add reference
+                add_reference_to_stage(usd_path=usd_path, prim_path=prim_path)
+                
+                # Transforms
+                if "translation" in item:
+                    # We need to apply translation to the prim
+                    # But add_reference returns the primitive if we are lucky? 
+                    # Actually add_reference_to_stage returns the prim.
+                    pass 
+
+                # Collision
+                if item.get("collision", False):
+                     SingleGeometryPrim(prim_path=prim_path, collision=True)
+                     
+                prim = get_prim_at_path(prim_path)
+
+                if "collision_approximation" in item:
+                     # We need SingleGeometryPrim wrapper usually
+                     geo_prim = SingleGeometryPrim(prim_path=prim_path)
+                     geo_prim.set_collision_approximation(item["collision_approximation"])
+
+                # Rigid Body
+                if item.get("rigid_body", False):
+                    trans = np.array(item.get("translation", [0,0,0]))
+                    orient = None
+                    if "orientation" in item:
+                        orient = euler_angles_to_quat(np.array(item["orientation"]), degrees=True)
+                        
+                    scale = None
+                    if "scale" in item:
+                        scale = np.array(item["scale"])
+                        
+                    SingleRigidPrim(prim_path=prim_path,
+                                    translation=trans,
+                                    orientation=orient,
+                                    scale=scale,
+                                    mass=item.get("mass", None))
+                else:
+                    # If not rigid body, but has transform
+                     if "translation" in item or "orientation" in item:
+                        # Use XformPrim or just set attributes?
+                        # SingleRigidPrim is easy wrapper but adds RigidBodyAPI.
+                        # For static items, we might just want to set xform.
+                        # But in Isaac Core, XformPrim can be used.
+                        from isaacsim.core.prims import XformPrim
+                        orient = None
+                        if "orientation" in item:
+                            orient = euler_angles_to_quat(np.array(item["orientation"]), degrees=True)
+                        trans = None
+                        if "translation" in item:
+                            trans = np.array(item["translation"])
+                        scale = None
+                        if "scale" in item:
+                            scale = np.array(item["scale"])
+                            
+                        xp = XformPrim(prim_path=prim_path, translation=trans, orientation=orient, scale=scale)
+
+                # Semantics
+                if "semantics" in item:
+                    for sem in item["semantics"]:
+                        # path relative to prim_path
+                        target_path = f"{prim_path}/{sem['path']}"
+                        prim = get_prim_at_path(target_path)
+                        if prim.IsValid():
+                            add_update_semantics(prim=prim,
+                                                type_label=sem['type'],
+                                                semantic_label=sem['value'])
+                        else:
+                            print(f"[WARN] Could not find prim at {target_path} to apply semantics.")
+
             
         # add bluerov robot as reference
         robot_prim_path = "/World/rob"
-        robot_usd_path = get_oceansim_assets_path() + "/Bluerov/BROV_low.usd"
+        robot_usd_path = get_scene_path("robot")
         self._rob = add_reference_to_stage(usd_path=robot_usd_path, prim_path=robot_prim_path)
         # Toggle rigid body and collider preset for robot, and set zero gravity to mimic underwater environment
         rob_rigidBody_API = PhysxSchema.PhysxRigidBodyAPI.Apply(get_prim_at_path(robot_prim_path))
