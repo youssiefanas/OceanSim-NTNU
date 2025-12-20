@@ -13,6 +13,7 @@ import os
 
 # Custom import
 from isaacsim.oceansim.utils.UWrenderer_utils import UW_render
+import PIL.Image
 
 '''
 Attention:
@@ -26,6 +27,10 @@ import rclpy
 from sensor_msgs.msg import CompressedImage
 import time
 import cv2
+
+# Default Underwater Parameters (Jerlov 5C - Turbid)
+# [Backscatter R, G, B, Backscatter Coeff R, G, B, Atten Coeff R, G, B]
+UW_param =[0.0, 0.31, 0.24, 0.05, 0.05, 0.2, 0.05, 0.05, 0.05 ]
 
 class UW_Camera(Camera):
 
@@ -104,9 +109,13 @@ class UW_Camera(Camera):
         super().initialize(physics_sim_view)
 
         self._writing_dir = writing_dir
+        self._UW_yaml_path = UW_yaml_path
+        #yaml path
+        print(f'UW YAML Path cam file: {self._UW_yaml_path}')
 
-        if UW_yaml_path is not None:
-            with open(UW_yaml_path, 'r') as file:
+        if self._UW_yaml_path and os.path.exists(self._UW_yaml_path):
+            print(f'UW YAML Path cam file: {self._UW_yaml_path} exists')
+            with open(self._UW_yaml_path, 'r') as file:
                 try:
                     # Load the YAML content
                     yaml_content = yaml.safe_load(file)
@@ -143,8 +152,9 @@ class UW_Camera(Camera):
             if not os.path.exists(writing_dir_depth):
                 os.makedirs(writing_dir_depth)
             self._writing_dir_depth = writing_dir_depth
-            self._writing_backend_RGB = rep.BackendDispatch({"paths": {"out_dir": writing_dir_RGB}})
-            self._writing_backend_depth = rep.BackendDispatch({"paths": {"out_dir": writing_dir_depth}})
+            if not os.path.exists(writing_dir_depth):
+                os.makedirs(writing_dir_depth)
+            self._writing_dir_depth = writing_dir_depth
 
         # ROS2 configuration
         self._enable_ros2_pub = enable_ros2_pub
@@ -262,9 +272,20 @@ class UW_Camera(Camera):
                     self._provider.set_bytes_data_from_gpu(uw_image.ptr, self.get_resolution())
                 
                 # 4. Data Writing
-                if self._writing and self._writing_backend_RGB is not None and self._writing_backend_depth is not None:
+                if self._writing:
                     # Save RGB Image
-                    self._writing_backend_RGB.schedule(write_image, path=f'UW_image_{self._id}.png', data=uw_image)
+                    # uw_image is a Warp array (RGBA), convert to numpy
+                    uw_image_np = uw_image.numpy()
+                    if uw_image_np.dtype != np.uint8:
+                         uw_image_np = uw_image_np.astype(np.uint8)
+                         
+                    # Save path
+                    img_path = os.path.join(self._writing_dir_RGB, f'UW_image_{self._id}.png')
+                    # Robust check: ensure dir exists
+                    if not os.path.exists(os.path.dirname(img_path)):
+                        os.makedirs(os.path.dirname(img_path))
+                        
+                    PIL.Image.fromarray(uw_image_np, "RGBA").save(img_path)
                     
                     # Save Depth Data (Use the CPU variable 'depth_data_cpu' here)
                     # We use os.path.join to ensure it goes to the correct folder
@@ -279,9 +300,7 @@ class UW_Camera(Camera):
                     else:
                          depth_data_cpu = depth
 
-                    self._writing_backend_depth.schedule(np.save, file=depth_full_path, arr=depth_data_cpu)
-
-                    # print(f'[{self._name}] [{self._id}] Saved RGB and Depth to {self._writing_dir}')
+                    np.save(file=depth_full_path, arr=depth_data_cpu)
                 
                 # 5. ROS2 Publishing
                 if self._enable_ros2_pub:

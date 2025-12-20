@@ -1,98 +1,94 @@
-# BlueROV with IMU
+# OceanSim - Underwater Robotics Simulator for Isaac Sim
 
-This guide will help you set up and run the BlueROV simulation with an IMU sensor in OceanSim.
+OceanSim is a comprehensive extension for NVIDIA Isaac Sim designed to simulate underwater environments and robotic systems. It provides realistic sensor simulation, ROS2 integration, and tools for large-scale synthetic data generation.
 
-### 1. Download the BlueROV Asset File with IMU
+## Features
 
-Download the `BROV_IMU.usd` file from:
-[Google Drive Link](https://drive.google.com/file/d/1iUSkD-w_9yzr1Q_m8cNrHmGdzrtYz2bs/view?usp=sharing)
+*   **Realistic Underwater Sensors**:
+    *   **Underwater Camera**: Simulates light attenuation, backscatter, and particulates. Configurable via YAML.
+    *   **Imaging Sonar**: Simulates acoustic imaging (Visual only).
+    *   **DVL (Doppler Velocity Log)**: Provides velocity estimates with configurable noise and dropout simulation.
+    *   **IMU**: Accelerometer and Gyroscope with configurable bias and noise models.
+    *   **Barometer**: Depth/Pressure simulation based on hydrostatic pressure.
+*   **ROS2 Integration**: Full bridge support. Publishes sensor data to ROS2 topics and accepts control commands.
+*   **Data Collection System**: Automated logging of synchronized sensor data and ground truth trajectories for machine learning datasets.
+*   **Random Trajectory Generation**: Integrated path planner (A*) that generates random collision-free paths using 2D occupancy maps.
+*   **Configurable Environment**: Externalized configuration for generic assets, maps, and simulation parameters.
 
-### 2. Place the Asset File
+## Configuration
 
-Save the downloaded file in your OceanSim assets directory:
+OceanSim uses YAML files to manage paths and settings, allowing flexibility without changing code.
 
-```text
-OceanSim_assets/Bluerov/BROV_IMU.usd
-```
+### 1. Main Configuration (`config/config.yaml`)
+Defines the paths to commonly used assets, maps, and global settings.
+*   **`paths`**: Locations of USD assets (robot, environment items) and map config files.
+*   **`filenames`**: Default filenames for output or loading (e.g., `map.yaml`, `imu_metadata.yaml`).
 
-### 3. Register Asset Path
+### 2. Map Configuration (`map.yaml`)
+Defines the 2D occupancy grid used for navigation and random path generation.
+*   **image**: Path to the PGM/PNG occupancy image.
+*   **resolution**: Meters per pixel.
+*   **origin**: Pose of the map origin in the world frame.
 
-If you haven't already configured OceanSim to recognize your asset path, run:
+> **Note on Map Generation**: The occupancy map logic is adapted from the [Isaac Sim Replicator Mobility Gen tutorial](https://docs.isaacsim.omniverse.nvidia.com/5.1.0/synthetic_data_generation/tutorial_replicator_mobility_gen.html). We are *not* using the `mobility_gen` extension directly to avoid conflicts, but have adapted its core algorithms for OceanSim.
 
-```bash
-cd /path/to/OceanSim
-python3 config/register_asset_path.py /path/to/OceanSim_assets
-```
+### 3. Underwater Camera Config
+YAML files (e.g., `Jerlov_II.yaml`) controlling visual rendering:
+*   `atten_coeff`: RGB attenuation coefficients.
+*   `backscatter_coeff`: RGB scattering coefficients.
+*   `backscatter_value`: Ambient light color/intensity.
 
-### 4. [Optional] Branch Configuration
+## Usage Guide
 
-If you're working from your own branch instead of this one, ensure the USD path is correctly set:
+### 1. Launching the Simulator
+1.  Open Isaac Sim.
+2.  Enable the `OceanSim-NTNU` extension in the Extension Manager.
+3.  The **Sensor Example** window will appear.
 
-- Open `isaacsim/oceansim/modules/SensorExample_python/ui_builder.py`
+### 2. User Interface Controls
 
-- Verify this line points to your file:
+**Setup (Do this BEFORE clicking LOAD):**
+*   **Sensors**: Use checkboxes to enable/disable specific sensors (Sonar, Camera, DVL, Barometer, IMU).
+    *   *Note: Using the Camera requires checking the generic "Camera" box. You can then provide a specific UW Config YAML file path (Optional).*
+*   **Path to USD**: (Optional) specific USD environment to load. Leave empty for default.
+*   **Control Mode**:
+    *   `Manual control`: Use Keyboard or **Gamepad/Joystick**.
+    *   `ROS control`: Robot listens to `/cmd_vel` or force topics.
+    *   `Waypoints`: Robot follows a pre-defined path or a **randomly generated path** if enabled.
 
-```python
-robot_usd_path = get_oceansim_assets_path() + "/Bluerov/BROV_IMU.usd"
-```
+**Run Scenario:**
+1.  **LOAD**: Initializes the robot, sensors, and environment.
+2.  **RESET**: **Important:** Always click RESET after LOAD to ensure proper sensor initialization.
+3.  **RUN/STOP**: Starts or pauses the physics simulation.
 
-**Alternatively:** Simply rename your downloaded file to `BROV_low.usd` to match the default configuration.
+### 3. Data Collection Mode
+To generate synthetic datasets:
+1.  Check **"Data Collection Mode"**.
+2.  Select a **"Path to save data"**.
+3.  Click **LOAD** and then **RUN**.
+4.  The simulator will record data from all enabled sensors.
 
-## Running the Simulation
+**Output Structure:**
+The system creates a timestamped folder or uses your selected folder to save:
+*   `camera_sensor/`: RGB Images and Depth `.npy` files.
+*   `DVL_sensor/dvl_data.csv`: Timestamp, Velocity (u, v, w).
+*   `barometer_sensor/barometer_data.csv`: Timestamp, Pressure (Pa).
+*   `IMU_sensor/imu_data.csv`: Timestamp, Accel(xyz), Gyro(xyz).
+*   `ground_truth/trajectory.csv`: Timestamp, Position(xyz), Orientation(quat).
 
-### 5. Launch IsaacSim with OceanSim
+## ROS2 Interface
 
-1. Start Isaac Sim with the OceanSim extension
+OceanSim automatically publishes sensor data to ROS2 topics if the bridge is enabled.
 
-2. Open the Sensor Example tab
+| Sensor | Topic | Message Type |
+| :--- | :--- | :--- |
+| **Camera** | `/oceansim/robot/uw_img` | `sensor_msgs/CompressedImage` |
+| **DVL** | `/dvl/velocity` | `geometry_msgs/TwistStamped` |
+| **Barometer** | `/barometer/pressure` | `sensor_msgs/FluidPressure` |
+| **IMU** | `/oceansim/robot/imu` | `sensor_msgs/Imu` |
+| **Pose (GT)**| `/oceansim/robot/pose` | `geometry_msgs/PoseStamped` |
+| **CMD_Vel** | `/oceansim/robot/cmd_vel` | `geometry_msgs/Twist` (Subscriber) |
 
-3. Select the additional sensors you want to include
+## Contributing
 
-4. Click LOAD
-
-> **Note**: No need to manually select a USD path—this was automatically handled when you registered the asset path.
-
-## Troubleshooting
-
-### 6. Giant Camera
-
-If a large camera appears in the simulation:
-
-- Toggle off the visibility property from the UW_camera prim in the scene hierarchy.
-
-### 7. IMU Data Not Publishing
-
-If you encounter this warning in the console or Action Graph:
-
-```text
-2025-10-24 21:42:46 [Warning] [omni.graph.core.plugin] /World/rob/IMUActionGraph/isaac_read_imu_node: [/World/rob/IMUActionGraph] no valid sensor reading, is the sensor enabled?
-```
-
-**Solution:**
-
-1. Click the **RESET** button in the Sensor Example tab
-
-2. Run the simulation again
-
-## Data Visualization with Foxglove
-
-### 8. Install Foxglove Bridge
-
-```bash
-sudo apt install ros-$ROS_DISTRO-foxglove-bridge
-```
-
-### 9. Launch Foxglove Bridge
-```
-ros2 run foxglove_bridge foxglove_bridge
-```
-
-### 10. Connect and Visualize
-
-1. Open Foxglove Studio in your browser
-
-2. Establish a new connection
-
-3. Select the appropriate WebSocket connection
-
-4. You should now be able to visualize the IMU data and other ROS 2 topics
+This project is open-source. Pull requests are welcome for new sensors, improved physical models, or additional environments.

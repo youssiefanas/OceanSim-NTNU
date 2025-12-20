@@ -6,6 +6,7 @@ import omni.timeline
 import omni.ui as ui
 from omni.usd import StageEventType
 from pxr import PhysxSchema
+from isaacsim.oceansim.utils.assets_utils import get_imu_config_path, get_waypoints_default_path
 import carb
 
 # Isaac sim import
@@ -35,14 +36,11 @@ class UIBuilder():
         self._extension_path = get_extension_path(self._ext_id)
         
         self._ctrl_mode = 'Manual control' #"ROS control" 
-        self._waypoints_path = self._extension_path + '/demo/demo_waypoints.txt'
-        self._waypoints_path = self._extension_path + '/demo/demo_waypoints.txt'
+        self._waypoints_path = get_waypoints_default_path()
         self._data_collection_path = ""
         
         # Calculate IMU config path relative to this file
-        # ui_builder.py -> modules -> oceansim -> config/imu_config.yaml
-        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        self._imu_config_path = os.path.join(base_dir, "config", "imu_config.yaml")
+        self._imu_config_path = get_imu_config_path()
         # Get access to the timeline to control stop/pause/play programmatically
         self._timeline = omni.timeline.get_timeline_interface()
 
@@ -107,6 +105,12 @@ class UIBuilder():
         Perform any necessary cleanup such as removing active callback functions
         Buttons imported from omni.isaac.ui.element_wrappers implement a cleanup function that should be called
         """
+        if self._scenario:
+            try:
+                self._scenario.destroy()
+            except Exception as e:
+                print(f"Error destroying scenario: {e}")
+                
         self._DVL_event_sub = None
         self._baro_event_sub = None
         self._IMU_event_sub_gyro = None  # <--- CORRECT NAME
@@ -115,7 +119,7 @@ class UIBuilder():
             ui_elem.cleanup()
         for frame in self.frames:
             frame.cleanup()
-
+            
     def build_ui(self):
         """
         Build a custom UI tool to run your extension.
@@ -151,6 +155,16 @@ class UIBuilder():
                 )
                 self._use_camera = False
                 self.wrapped_ui_elements.append(camera_check_box)
+
+                self._uw_yaml_path_field = str_builder(
+                    label='Path to UW Config',
+                    default_val="",
+                    tooltip='Select the YAML file for underwater camera config (optional)',
+                    use_folder_picker=True,
+                    folder_button_title="Select YAML",
+                    folder_dialog_title='Select UW Camera YAML Config'
+                )
+                self._uw_yaml_path_field.add_value_changed_fn(self._on_uw_yaml_path_changed_fn)
 
                 DVL_check_box = CheckBox(
                     'DVL',
@@ -280,6 +294,7 @@ class UIBuilder():
         # Robot parameters
         self._rob_mass = 5.0 # kg
         self._rob_angular_damping = 10.0
+        self._uw_yaml_path = ""
         self._rob_linear_damping = 10.0
 
         # Sensor
@@ -423,6 +438,16 @@ class UIBuilder():
         
 
         if self._use_sonar:
+            print("[Debug] Initializing Sonar...")
+            # Cleanup old sonar if it exists to prevent Replicator conflicts
+            if self._sonar is not None:
+                print("[Debug] Cleaning up old Sonar instance...")
+                try:
+                    self._sonar.close()
+                except Exception as e:
+                    print(f"[Debug] Error closing old Sonar: {e}")
+                self._sonar = None
+
             from isaacsim.oceansim.sensors.ImagingSonarSensor import ImagingSonarSensor
             self._sonar = ImagingSonarSensor(prim_path=robot_prim_path + '/sonar',
                                             translation=self._sonar_trans,
@@ -445,17 +470,22 @@ class UIBuilder():
             # 1. Get the singleton instance of the World
             world = World.instance()
 
-            # 2. Get the rendering time step (dt)
-            # Note: This returns the 'rendering_dt' you set (e.g., 0.01)
-            render_dt = world.get_rendering_dt()
-
-            # 3. Calculate the frequency (Hz)
-            if render_dt is not None and render_dt > 0:
-                render_freq = 1.0 / render_dt
-                print(f"Rendering Frequency: {render_freq} Hz")
-                self._cam.set_frequency(int(render_freq))
+            if world is None:
+                carb.log_warn("World instance is None. Camera frequency default to 60Hz.")
+                self._cam.set_frequency(60)
             else:
-                print("World is not initialized or rendering_dt is zero.")
+                # 2. Get the rendering time step (dt)
+                # Note: This returns the 'rendering_dt' you set (e.g., 0.01)
+                render_dt = world.get_rendering_dt()
+
+                # 3. Calculate the frequency (Hz)
+                if render_dt is not None and render_dt > 0:
+                    render_freq = 1.0 / render_dt
+                    print(f"Rendering Frequency: {render_freq} Hz")
+                    self._cam.set_frequency(int(render_freq))
+                else:
+                    print("World is not initialized or rendering_dt is zero.")
+                    self._cam.set_frequency(60) # Default fallback
             
         if self._use_DVL:
             from isaacsim.oceansim.sensors.DVLsensor import DVLsensor
@@ -506,7 +536,8 @@ class UIBuilder():
             self._IMU, 
             self._ctrl_mode,
             self._data_collection_mode,
-            data_collection_path=self._data_collection_path
+            data_collection_path=self._data_collection_path,
+            uw_yaml_path=self._uw_yaml_path_field.get_value_as_string() if hasattr(self, '_uw_yaml_path_field') else ""
             )
         self._scenario.setup_waypoints(
             waypoint_path=self._waypoints_path, 
@@ -600,6 +631,10 @@ class UIBuilder():
         print('Reload the scene for changes to take effect.')
     def _on_Gyro_checkbox_click_fn(self, model):
         self._use_IMU = model or self._accel_check_box.get_value_as_bool()
+
+    def _on_uw_yaml_path_changed_fn(self, model):
+        self._uw_yaml_path = model.get_value_as_string()
+        print(f'UW YAML Path: {self._uw_yaml_path}')
         print('Reload the scene for changes to take effect.')
     
     def _on_manual_ctrl_cb_click_fn(self, model):
@@ -638,7 +673,8 @@ class UIBuilder():
                 self.data_collection_frame.visible = False
         with self.waypoints_frame:
             if self._ctrl_mode == 'Waypoints':
-                self._build_waypoints_filepicker()
+                with ui.VStack(style=get_style(), spacing=5):
+                    self._build_waypoints_filepicker()
                 self.waypoints_frame.visible = True
             else:
                 self.waypoints_frame.visible = False
@@ -684,6 +720,13 @@ class UIBuilder():
             default_waypoint_path=self._extension_path + '/demo/demo_waypoints.txt'
             )
         self._waypoints_path_field.add_value_changed_fn(self._on_waypoints_path_changed_fn)
+        
+        def on_random_click():
+            self._waypoints_path_field.set_value("RANDOM")
+            # Trigger change manually
+            self._on_waypoints_path_changed_fn(self._waypoints_path_field)
+
+        ui.Button("Generate Random Waypoints", clicked_fn=on_random_click, height=20, style={"margin": 5})
 
     def _on_waypoints_path_changed_fn(self, model):
         self._waypoints_path = model.get_value_as_string()

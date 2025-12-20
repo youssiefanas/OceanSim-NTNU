@@ -78,6 +78,10 @@ class BarometerSensor(BaseSensor):
         self._ros2_pub = None
         self._enable_ros2 = False  
 
+        # Logging
+        self._csv_file = None
+        self._csv_writer = None
+
 
     
         physics_context = PhysicsContext()
@@ -149,7 +153,40 @@ class BarometerSensor(BaseSensor):
         except Exception as e:
             carb.log_error(f"[{self._name}] Failed to publish ROS2: {e}")
 
+    def init_logging(self, save_path):
+        """Initialize CSV logging"""
+        try:
+            import csv
+            import os
+            file_path = os.path.join(save_path, "barometer_data.csv")
+            self._csv_file = open(file_path, mode='w', newline='')
+            self._csv_writer = csv.writer(self._csv_file)
+            # Header
+            self._csv_writer.writerow(['timestamp', 'pressure_pa'])
+            print(f"[{self._name}] Initialized data logging to {file_path}")
+        except Exception as e:
+            carb.log_error(f"[{self._name}] Failed to init logging: {e}")
+            print(f"[{self._name}] Failed to init logging: {e}")
+
+    def log_data(self, timestamp, pressure):
+        """Write a single frame of data to CSV"""
+        if self._csv_writer:
+            try:
+                row = [timestamp, pressure]
+                self._csv_writer.writerow(row)
+            except Exception as e:
+                print(f"[{self._name}] Error writing log: {e}")
+
     def cleanup(self):
+        # Close CSV
+        if self._csv_file:
+            try:
+                self._csv_file.close()
+                self._csv_file = None
+                print(f"[{self._name}] Closed log file.")
+            except Exception as e:
+                print(f"[{self._name}] Error closing log file: {e}")
+
         if self._ros2_node:
             self._ros2_node.destroy_node()
             self._ros2_node = None

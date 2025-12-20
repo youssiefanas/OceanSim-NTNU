@@ -19,7 +19,17 @@ from isaacsim.core.utils.extensions import enable_extension
 enable_extension("isaacsim.util.debug_draw")
 from isaacsim.util.debug_draw import _debug_draw
 
+from isaacsim.core.utils.extensions import enable_extension
+enable_extension("isaacsim.util.debug_draw")
+from isaacsim.util.debug_draw import _debug_draw
+
 from isaacsim.oceansim.sensors.datacollection import DataCollectionSensor
+from isaacsim.oceansim.utils.occupancy_map import OccupancyMap, Point2d
+from isaacsim.oceansim.utils.path_planner import generate_random_path
+from isaacsim.oceansim.utils.assets_utils import get_map_config_path, get_data_collection_root
+import os
+import PIL.ImageDraw
+import time
 
 # ROS Control import
 try:
@@ -116,7 +126,7 @@ class MHL_Sensor_Example_Scenario():
 
         self._timeline = omni.timeline.get_timeline_interface()
 
-    def setup_scenario(self, rob, sonar, cam, DVL, baro, IMU, ctrl_mode,data_collection_mode, data_collection_path=""):
+    def setup_scenario(self, rob, sonar, cam, DVL, baro, IMU, ctrl_mode,data_collection_mode, data_collection_path="", uw_yaml_path=None):
         if not rclpy.ok():
             print("[Scenario] ROS2 Context was dead. Resurrecting before sensor init...")
             rclpy.init()
@@ -148,15 +158,27 @@ class MHL_Sensor_Example_Scenario():
             if self._cam is not None:
                 sensor_name = "camera_sensor"
                 sensor_path = self._data_collector.collect_data(name=sensor_name)
-                self._cam.initialize(writing_dir=sensor_path, ros2_pub_frequency=self._cam.get_frequency())#UW_yaml_path='/home/osim-mir/OceanSimAssets/water_params_test.yaml')#, )
+                self._cam.initialize(writing_dir=sensor_path, ros2_pub_frequency=self._cam.get_frequency(), UW_yaml_path=uw_yaml_path)
             if self._DVL is not None:
                 sensor_name = "DVL_sensor"
                 sensor_path = self._data_collector.collect_data(name=sensor_name)
                 self._DVL_reading = [0.0, 0.0, 0.0]
+                self._DVL.init_logging(sensor_path)
+
             if self._baro is not None:
                 sensor_name = "barometer_sensor"
                 sensor_path = self._data_collector.collect_data(name=sensor_name)
                 self._baro_reading = 101325.0 # atmospheric pressure (Pa)
+                self._baro.init_logging(sensor_path)
+
+            # Ground Truth (Trajectory)
+            sensor_name = "ground_truth"
+            sensor_path = self._data_collector.collect_data(name=sensor_name)
+            import csv
+            import os
+            self._gt_csv_file = open(os.path.join(sensor_path, "trajectory.csv"), 'w', newline='')
+            self._gt_csv_writer = csv.writer(self._gt_csv_file)
+            self._gt_csv_writer.writerow(['timestamp', 'p_x', 'p_y', 'p_z', 'q_w', 'q_x', 'q_y', 'q_z'])
             if self._IMU is not None:
                 sensor_name = "IMU_sensor"
                 sensor_path = self._data_collector.collect_data(name=sensor_name)
@@ -174,7 +196,7 @@ class MHL_Sensor_Example_Scenario():
             if self._sonar is not None:
                 self._sonar.sonar_initialize(include_unlabelled=True)
             if self._cam is not None:
-                self._cam.initialize(ros2_pub_frequency=self._cam.get_frequency())#UW_yaml_path='/home/osim-mir/OceanSimAssets/water_params_test.yaml')#, writing_dir="/home/osim-mir/OceanSimAssets/GroundTruth")
+                self._cam.initialize(ros2_pub_frequency=self._cam.get_frequency(), UW_yaml_path=uw_yaml_path)#, writing_dir="/home/osim-mir/OceanSimAssets/GroundTruth")
             if self._DVL is not None:
                 self._DVL_reading = [0.0, 0.0, 0.0]
             if self._baro is not None:
@@ -308,7 +330,125 @@ class MHL_Sensor_Example_Scenario():
             self._ros2_control_receiver = None
 
     # This function will only be called if ctrl_mode==waypoints and waypoints files are changed
+    def generate_random_waypoints(self):
+        print("[Scenario] Generating random waypoints...")
+        # Resolve path to map.yaml via config
+        map_yaml_path = get_map_config_path()
+        map_yaml_path = os.path.normpath(map_yaml_path)
+        
+        if not os.path.exists(map_yaml_path):
+            print(f"[Scenario] Error: map.yaml not found at {map_yaml_path}")
+            return
+
+        try:
+            omap = OccupancyMap.from_ros_yaml(map_yaml_path)
+            
+            # Get current robot pose
+            if self._rob is not None:
+                # self._rob is maybe a Prim or Rig? 
+                # Needs logic to get translation. 
+                # Assuming UsdGeom.Xformable get translation
+                 curr_transform = UsdGeom.Xformable(self._rob).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+                 trans = curr_transform.ExtractTranslation()
+                 start_pose = Point2d(x=trans[0], y=trans[1])
+            else:
+                 start_pose = None
+
+            path = generate_random_path(omap, start_pose)
+            
+            if path is not None:
+                # Retrieve current Z and Orientation to maintain stable height/rotation
+                # Default values if robot not found
+                current_z = -0.8
+                current_quat = [1.0, 0.0, 0.0, 0.0] # w, x, y, z
+
+                if self._rob is not None:
+                     if self._rob.IsValid():
+                         curr_transform = UsdGeom.Xformable(self._rob).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+                         trans = curr_transform.ExtractTranslation()
+                         rot = curr_transform.ExtractRotationQuat()
+                         current_z = trans[2]
+                         current_quat = [rot.GetReal(), rot.GetImaginary()[0], rot.GetImaginary()[1], rot.GetImaginary()[2]]
+                     else:
+                         print("[Scenario] Warning: Robot prim is invalid. Using default start pose Z and orientation.")
+
+                # Convert to list and append Z and Orientation
+                # Expectation from update_scenario:
+                # self._rob.GetAttribute('xformOp:translate').Set(Gf.Vec3f(waypoints[0], waypoints[1], waypoints[2]))
+                # self._rob.GetAttribute('xformOp:orient').Set(Gf.Quatd(waypoints[3], waypoints[4], waypoints[5], waypoints[6]))
+                # So format is: [x, y, z, w, x, y, z]
+                
+                full_waypoints = []
+                for p in path:
+                    # p is [x, y]
+                    point_data = [
+                        float(p[0]), 
+                        float(p[1]), 
+                        float(current_z),
+                        float(current_quat[0]),
+                        float(current_quat[1]), 
+                        float(current_quat[2]), 
+                        float(current_quat[3])
+                    ]
+                    full_waypoints.append(point_data)
+
+                self.waypoints = full_waypoints
+                
+                self.waypoints = full_waypoints
+                
+                print(f"[Scenario] Successfully set {len(self.waypoints)} random waypoints (with Z={current_z:.2f}).")
+                if len(self.waypoints) > 0:
+                     print(f"Waypoint[0]: {self.waypoints[0]}")
+                     
+                     # ---------------------------------------------------------
+                     # Save Map with Path
+                     # ---------------------------------------------------------
+                     try:
+                         # 1. Get Image
+                         img = omap.ros_image().convert("RGB") # Convert to RGB to draw colored lines
+                         draw = PIL.ImageDraw.Draw(img)
+                         
+                         # 2. Convert path to pixels
+                         # path is numpy array of [x, y]
+                         pixels = omap.world_to_pixel_numpy(path)
+                         
+                         # 3. Draw Lines
+                         # pixels is [[x, y], [x, y], ...]
+                         pixel_tuples = [tuple(p) for p in pixels]
+                         if len(pixel_tuples) > 1:
+                            draw.line(pixel_tuples, fill="red", width=2)
+                            
+                         # Draw Start (Green) and End (Blue) circles
+                         start_px = pixel_tuples[0]
+                         end_px = pixel_tuples[-1]
+                         r = 3
+                         draw.ellipse((start_px[0]-r, start_px[1]-r, start_px[0]+r, start_px[1]+r), fill="green")
+                         draw.ellipse((end_px[0]-r, end_px[1]-r, end_px[0]+r, end_px[1]+r), fill="blue")
+
+                         # 4. Save
+                         timestamp = time.strftime("%Y%m%d-%H%M%S")
+                         save_filename = f"generated_path_{timestamp}.png"
+                         save_path = os.path.join(os.path.dirname(map_yaml_path), save_filename)
+                         img.save(save_path)
+                         print(f"[Scenario] Saved generated path image to: {save_path}")
+                         
+                     except Exception as e:
+                         print(f"[Scenario] Warning: Failed to save path image: {e}")
+            else:
+                 print("[Scenario] Failed to generate path, falling back to empty.")
+                 self.waypoints = []
+                 
+        except Exception as e:
+            print(f"[Scenario] Critical error generating path: {e}")
+            import traceback
+            traceback.print_exc()
+
     def setup_waypoints(self, waypoint_path, default_waypoint_path):
+        
+        if waypoint_path == "RANDOM":
+             self.generate_random_waypoints()
+             return
+
         def read_data_from_file(file_path):
             # Initialize an empty list to store the floats
             data = []
@@ -337,7 +477,7 @@ class MHL_Sensor_Example_Scenario():
 
     def setup_data_collection(self, data_path):
         if data_path is None or data_path=="":
-            data_path = "/home/osim-mir/data_collected_oceansim"
+            data_path = get_data_collection_root()
         else:
             data_path = data_path
         self.data_collection_path = data_path
@@ -359,6 +499,14 @@ class MHL_Sensor_Example_Scenario():
             self._cam.close()
         if self._IMU is not None:
             self._IMU.close()
+        
+        if hasattr(self, '_gt_csv_file') and self._gt_csv_file:
+            try:
+                self._gt_csv_file.close()
+                self._gt_csv_file = None
+                print("Closed Ground Truth log file.")
+            except Exception as e:
+                print(f"Error closing GT log: {e}")
         
         if self._DVL is not None:
              self._DVL.cleanup()
@@ -389,6 +537,29 @@ class MHL_Sensor_Example_Scenario():
         self._running_scenario = False
         self._time = 0.0
 
+
+    def destroy(self):
+        """Cleanup persistent resources including ROS2 nodes"""
+        self.teardown_scenario()
+        
+        # Destroy ROS2 nodes created in __init__
+        try:
+            if hasattr(self, '_rob_cmd_pub') and self._rob_cmd_pub:
+                self._rob_cmd_pub.destroy()
+            if hasattr(self, '_ros2_rob_cmd_node') and self._ros2_rob_cmd_node:
+                self._ros2_rob_cmd_node.destroy_node()
+                print("[Scenario] Destroyed cmd node")
+                
+            if hasattr(self, '_rob_pose_pub') and self._rob_pose_pub:
+                self._rob_pose_pub.destroy()
+            if hasattr(self, '_path_pub') and self._path_pub:
+                self._path_pub.destroy()
+            if hasattr(self, '_ros2_rob_pose_node') and self._ros2_rob_pose_node:
+                self._ros2_rob_pose_node.destroy_node()
+                print("[Scenario] Destroyed pose node")
+                
+        except Exception as e:
+            print(f"[Scenario] Error destroying ROS nodes: {e}")
 
     def update_scenario(self, step: float):
 
@@ -547,12 +718,11 @@ class MHL_Sensor_Example_Scenario():
             self._last_cam_time = 0.0
         
         # Check if enough time (sim time) has passed since last render
-        if (self._time - self._last_cam_time) >= (1.0 / self._cam.get_frequency()):
-            if self._cam is not None:
+        if self._cam is not None:
+            if (self._time - self._last_cam_time) >= (1.0 / self._cam.get_frequency()):
                 self._cam.render(sim_time=self._time)
-            
-            # Update tracker
-            self._last_cam_time = self._time
+                # Update tracker
+                self._last_cam_time = self._time
         
         if self._sonar is not None:
             self._sonar.make_sonar_data()
@@ -562,12 +732,28 @@ class MHL_Sensor_Example_Scenario():
             if not np.any(np.isnan(new_dvl_reading)):
                  self._DVL_reading = new_dvl_reading
                  self._DVL.publish_ros2(self._time, self._DVL_reading)
+                 if self._data_collection_mode:
+                     self._DVL.log_data(self._time, self._DVL_reading)
 
         # BARO UPDATE (Fast - 200 Hz)
         if self._baro is not None:
             self._baro_reading = self._baro.get_pressure()
             # Publish to ROS2
             self._baro.publish_ros2(self._time, self._baro_reading)
+            if self._data_collection_mode:
+                self._baro.log_data(self._time, self._baro_reading)
+
+        # Ground Truth Logging
+        if self._data_collection_mode and self._rob is not None and hasattr(self, '_gt_csv_writer') and self._gt_csv_writer:
+             try:
+                 wt = omni.usd.get_world_transform_matrix(self._rob)
+                 t = wt.ExtractTranslation()
+                 q = wt.ExtractRotationQuat()
+                 # timestamp, p_x, p_y, p_z, q_w, q_x, q_y, q_z
+                 row = [self._time, t[0], t[1], t[2], q.GetReal(), q.GetImaginary()[0], q.GetImaginary()[1], q.GetImaginary()[2]]
+                 self._gt_csv_writer.writerow(row)
+             except Exception as e:
+                 pass # minimize spam
 
         if self._ctrl_mode=="Manual control" or self._ctrl_mode=="ROS + Manual control":
             # Get Keyboard inputs
@@ -634,7 +820,9 @@ class MHL_Sensor_Example_Scenario():
                     if distance < THRESHOLD:
                         self.waypoints.pop(0)
                 else:
-                    print('Waypoints finished')  
+                    print('Waypoints finished')
+                    #generate new waypoints
+                    self.generate_random_waypoints()  
             else:
                 if len(self.waypoints) > 0:
                     waypoints = self.waypoints[0]
@@ -643,6 +831,7 @@ class MHL_Sensor_Example_Scenario():
                     self.waypoints.pop(0)
                 else:
                     print('Waypoints finished')
+                    self.generate_random_waypoints()  
                     
               
         elif self._ctrl_mode=="Straight line":

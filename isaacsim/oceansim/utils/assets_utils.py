@@ -30,7 +30,8 @@ def get_assets_root() -> str:
 def get_data_collection_root() -> str:
     """Returns the default root path for data collection."""
     config = load_config()
-    return config.get("paths", {}).get("data_collection_root", "/home/osim-mir/data_collected_oceansim")
+    path = config.get("paths", {}).get("data_collection_root", "~/data_collected_oceansim")
+    return os.path.expanduser(path)
 
 def get_scene_path(scene_key: str) -> str:
     """Returns the full path for a specific scene asset.
@@ -65,16 +66,58 @@ def get_waypoints_default_path() -> str:
     if os.path.isabs(rel_path):
         return rel_path
         
-    # Go up 3 levels from utils/ to get to OceanSim-NTNU/
+    return os.path.join(_get_extension_root(), rel_path)
+
+def get_map_config_path() -> str:
+    """Returns the full path to the map.yaml file."""
+    config = load_config()
+    rel_path = config.get("paths", {}).get("configs", {}).get("map", "")
+    if not rel_path:
+        # Fallback if not defined
+        return os.path.join(_get_extension_root(), "isaacsim/oceansim/config/map.yaml")
+        
+    if os.path.isabs(rel_path):
+        return rel_path
+    
+    return os.path.join(_get_extension_root(), rel_path)
+
+def get_imu_config_path() -> str:
+    """Returns the full path to the imu_config.yaml file."""
+    config = load_config()
+    rel_path = config.get("paths", {}).get("configs", {}).get("imu", "")
+    if not rel_path:
+         # Fallback
+         return os.path.join(_get_extension_root(), "isaacsim/oceansim/config/imu_config.yaml")
+
+    if os.path.isabs(rel_path):
+        return rel_path
+
+    return os.path.join(_get_extension_root(), rel_path)
+
+def _get_extension_root() -> str:
+    """Returns the extension root directory."""
     # utils -> oceansim -> isaacsim -> OceanSim-NTNU
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    ext_root = os.path.abspath(os.path.join(current_dir, "../../../"))
-    
-    return os.path.join(ext_root, rel_path)
+    return os.path.abspath(os.path.join(current_dir, "../../../"))
 
 # Backwards compatibility alias if needed, but we should refactor usages.
 def get_oceansim_assets_path() -> str:
     return get_assets_root()
+
+def get_map_image_filename() -> str:
+    """Returns the filename for the map image (e.g. map.png)."""
+    config = load_config()
+    return config.get("filenames", {}).get("map_image", "map.png")
+
+def get_map_yaml_filename() -> str:
+    """Returns the filename for the map yaml (e.g. map.yaml)."""
+    config = load_config()
+    return config.get("filenames", {}).get("map_yaml", "map.yaml")
+
+def get_imu_metadata_filename() -> str:
+    """Returns the filename for the IMU metadata (e.g. imu_metadata.yaml)."""
+    config = load_config()
+    return config.get("filenames", {}).get("imu_metadata", "imu_metadata.yaml")
 
 if __name__ == "__main__":
     print("Config Path:", get_config_path())
