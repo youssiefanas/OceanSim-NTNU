@@ -55,6 +55,7 @@ class MHL_Sensor_Example_Scenario():
 
 
         self._ctrl_mode = None
+        self.waypoints = []
 
         self._running_scenario = False
         self._time = 0.0
@@ -152,8 +153,8 @@ class MHL_Sensor_Example_Scenario():
         if self._data_collection_mode:
             self.setup_data_collection(data_path=self.data_collection_path)
             if self._sonar is not None:
-                sensor_name = "sonar_sensor"
-                sensor_path = self._data_collector.collect_data(name=sensor_name)
+                # sensor_name = "sonar_sensor"
+                # sensor_path = self._data_collector.collect_data(name=sensor_name)
                 self._sonar.sonar_initialize(include_unlabelled=True)
             if self._cam is not None:
                 sensor_name = "camera_sensor"
@@ -336,6 +337,13 @@ class MHL_Sensor_Example_Scenario():
         map_yaml_path = get_map_config_path()
         map_yaml_path = os.path.normpath(map_yaml_path)
         
+        # Get data collection path/occupancy_map_folder
+        data_collection_path = get_data_collection_root()
+        data_collection_path = os.path.normpath(data_collection_path)
+        save_path = os.path.join(data_collection_path, "occupancy_map")
+        if not os.path.exists(save_path):
+            os.makedirs(save_path)      
+        
         if not os.path.exists(map_yaml_path):
             print(f"[Scenario] Error: map.yaml not found at {map_yaml_path}")
             return
@@ -426,11 +434,12 @@ class MHL_Sensor_Example_Scenario():
                          draw.ellipse((end_px[0]-r, end_px[1]-r, end_px[0]+r, end_px[1]+r), fill="blue")
 
                          # 4. Save
-                         timestamp = time.strftime("%Y%m%d-%H%M%S")
+                         timestamp = self._time
                          save_filename = f"generated_path_{timestamp}.png"
-                         save_path = os.path.join(os.path.dirname(map_yaml_path), save_filename)
-                         img.save(save_path)
-                         print(f"[Scenario] Saved generated path image to: {save_path}")
+                         # save in data_collection_path/occupancy_map
+                         save_dir = os.path.join(save_path, save_filename)
+                         img.save(save_dir)
+                         print(f"[Scenario] Saved generated path image to: {save_dir}")
                          
                      except Exception as e:
                          print(f"[Scenario] Warning: Failed to save path image: {e}")
