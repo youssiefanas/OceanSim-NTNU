@@ -19,10 +19,6 @@ from isaacsim.core.utils.extensions import enable_extension
 enable_extension("isaacsim.util.debug_draw")
 from isaacsim.util.debug_draw import _debug_draw
 
-from isaacsim.core.utils.extensions import enable_extension
-enable_extension("isaacsim.util.debug_draw")
-from isaacsim.util.debug_draw import _debug_draw
-
 from isaacsim.oceansim.sensors.datacollection import DataCollectionSensor
 from isaacsim.oceansim.utils.occupancy_map import OccupancyMap, Point2d
 from isaacsim.oceansim.utils.path_planner import generate_random_path
@@ -30,6 +26,7 @@ from isaacsim.oceansim.utils.assets_utils import get_map_config_path, get_data_c
 import os
 import PIL.ImageDraw
 import time
+import csv
 
 # ROS Control import
 try:
@@ -77,6 +74,13 @@ class MHL_Sensor_Example_Scenario():
             print('ROS2 context initialized')
 
 
+        if self._publish_cmds or self._publish_pose:
+            self._init_ros2_publishers()
+
+        self._timeline = omni.timeline.get_timeline_interface()
+
+    def _init_ros2_publishers(self):
+        """Initialize ROS2 publishers and subscribers."""
         if self._publish_cmds:
             # Create commands publisher node
             node_name = f'oceansim_rob_cmd_pub'
@@ -125,7 +129,113 @@ class MHL_Sensor_Example_Scenario():
                 else:
                     self._debug_draw = None
 
-        self._timeline = omni.timeline.get_timeline_interface()
+    def _init_manual_controllers(self):
+        """Initialize manual control interfaces (Keyboard/Gamepad)."""
+        from ...utils.keyboard_cmd import keyboard_cmd
+        from ...utils.gamepad_cmd import gamepad_cmd
+        import carb.input
+
+        self._rob_forceAPI = PhysxSchema.PhysxForceAPI.Apply(self._rob)
+        self._force_cmd = keyboard_cmd(base_command=np.array([0.0, 0.0, 0.0]),
+                                  input_keyboard_mapping={
+                                    # forward command
+                                    "W": [10.0, 0.0, 0.0],
+                                    # backward command
+                                    "S": [-10.0, 0.0, 0.0],
+                                    # leftward command
+                                    "A": [0.0, 10.0, 0.0],
+                                    # rightward command
+                                    "D": [0.0, -10.0, 0.0],
+                                     # rise command
+                                    "UP": [0.0, 0.0, 10.0],
+                                    # sink command
+                                    "DOWN": [0.0, 0.0, -10.0],
+                                  })
+        self._torque_cmd = keyboard_cmd(base_command=np.array([0.0, 0.0, 0.0]),
+                                  input_keyboard_mapping={
+                                    # yaw command (left)
+                                    "J": [0.0, 0.0, 10.0],
+                                    # yaw command (right)
+                                    "L": [0.0, 0.0, -10.0],
+                                    # pitch command (up)
+                                    "I": [0.0, -10.0, 0.0],
+                                    # pitch command (down)
+                                    "K": [0.0, 10.0, 0.0],
+                                    # row command (left)
+                                    "LEFT": [-10.0, 0.0, 0.0],
+                                    # row command (negative)
+                                    "RIGHT": [10.0, 0.0, 0.0],
+                                  })
+        self._joy_force = gamepad_cmd(
+            input_mapping={
+                carb.input.GamepadInput.LEFT_STICK_UP:    np.array([1.0, 0.0, 0.0]),   # Forward
+                carb.input.GamepadInput.LEFT_STICK_DOWN:  np.array([-1.0, 0.0, 0.0]),  # Backward
+                carb.input.GamepadInput.LEFT_STICK_LEFT:  np.array([0.0, 1.0, 0.0]),   # Left
+                carb.input.GamepadInput.LEFT_STICK_RIGHT: np.array([0.0, -1.0, 0.0]),  # Right
+                carb.input.GamepadInput.RIGHT_TRIGGER:    np.array([0.0, 0.0, 1.0]),   # Up
+                carb.input.GamepadInput.LEFT_TRIGGER:     np.array([0.0, 0.0, -1.0]),  # Down
+            },
+            scale=9.0 
+        )
+        
+        self._joy_torque = gamepad_cmd(
+            input_mapping={
+                # Pitch
+                carb.input.GamepadInput.RIGHT_STICK_UP:    np.array([0.0, -1.0, 0.0]), 
+                carb.input.GamepadInput.RIGHT_STICK_DOWN:  np.array([0.0, 1.0, 0.0]),
+                # Yaw
+                carb.input.GamepadInput.RIGHT_STICK_LEFT:  np.array([0.0, 0.0, 1.0]),
+                carb.input.GamepadInput.RIGHT_STICK_RIGHT: np.array([0.0, 0.0, -1.0]),
+                # Roll
+                carb.input.GamepadInput.LEFT_SHOULDER:     np.array([-1.0, 0.0, 0.0]),
+                carb.input.GamepadInput.RIGHT_SHOULDER:    np.array([1.0, 0.0, 0.0]),
+            },
+            scale=4.0
+        )
+
+    def _setup_data_logging_for_sensors(self, uw_yaml_path):
+        """Setup data collection and logging for all sensors."""
+        self.setup_data_collection(data_path=self.data_collection_path)
+        if self._sonar is not None:
+            # sensor_name = "sonar_sensor"
+            # sensor_path = self._data_collector.collect_data(name=sensor_name)
+            self._sonar.sonar_initialize(include_unlabelled=True)
+        if self._cam is not None:
+            sensor_name = "camera_sensor"
+            sensor_path = self._data_collector.collect_data(name=sensor_name)
+            self._cam.initialize(writing_dir=sensor_path, ros2_pub_frequency=self._cam.get_frequency(), UW_yaml_path=uw_yaml_path)
+        if self._DVL is not None:
+            sensor_name = "DVL_sensor"
+            sensor_path = self._data_collector.collect_data(name=sensor_name)
+            self._DVL_reading = [0.0, 0.0, 0.0]
+            self._DVL.init_logging(sensor_path)
+
+        if self._baro is not None:
+            sensor_name = "barometer_sensor"
+            sensor_path = self._data_collector.collect_data(name=sensor_name)
+            self._baro_reading = 101325.0 # atmospheric pressure (Pa)
+            self._baro.init_logging(sensor_path)
+
+        # Ground Truth (Trajectory)
+        sensor_name = "ground_truth"
+        sensor_path = self._data_collector.collect_data(name=sensor_name)
+
+        self._gt_csv_file = open(os.path.join(sensor_path, "trajectory.csv"), 'w', newline='')
+        self._gt_csv_writer = csv.writer(self._gt_csv_file)
+        self._gt_csv_writer.writerow(['timestamp', 'p_x', 'p_y', 'p_z', 'q_w', 'q_x', 'q_y', 'q_z'])
+        if self._IMU is not None:
+            sensor_name = "IMU_sensor"
+            sensor_path = self._data_collector.collect_data(name=sensor_name)
+            self._IMU.initialize()
+            self._IMU.save_metadata(save_path=sensor_path)
+            self._IMU.init_logging(save_path=sensor_path) # <--- Init CSV Logging
+            self._IMU_reading = {
+                'linear_acceleration': np.array([0.0, 0.0, 0.0]),
+                'angular_velocity':    np.array([0.0, 0.0, 0.0]),
+                'orientation':         np.array([1.0, 0.0, 0.0, 0.0]),
+                'time':                0.0,
+                'physics_step':        0    
+            }
 
     def setup_scenario(self, rob, sonar, cam, DVL, baro, IMU, ctrl_mode,data_collection_mode, data_collection_path="", uw_yaml_path=None):
         if not rclpy.ok():
@@ -151,48 +261,7 @@ class MHL_Sensor_Example_Scenario():
 
         # Data collection setup
         if self._data_collection_mode:
-            self.setup_data_collection(data_path=self.data_collection_path)
-            if self._sonar is not None:
-                # sensor_name = "sonar_sensor"
-                # sensor_path = self._data_collector.collect_data(name=sensor_name)
-                self._sonar.sonar_initialize(include_unlabelled=True)
-            if self._cam is not None:
-                sensor_name = "camera_sensor"
-                sensor_path = self._data_collector.collect_data(name=sensor_name)
-                self._cam.initialize(writing_dir=sensor_path, ros2_pub_frequency=self._cam.get_frequency(), UW_yaml_path=uw_yaml_path)
-            if self._DVL is not None:
-                sensor_name = "DVL_sensor"
-                sensor_path = self._data_collector.collect_data(name=sensor_name)
-                self._DVL_reading = [0.0, 0.0, 0.0]
-                self._DVL.init_logging(sensor_path)
-
-            if self._baro is not None:
-                sensor_name = "barometer_sensor"
-                sensor_path = self._data_collector.collect_data(name=sensor_name)
-                self._baro_reading = 101325.0 # atmospheric pressure (Pa)
-                self._baro.init_logging(sensor_path)
-
-            # Ground Truth (Trajectory)
-            sensor_name = "ground_truth"
-            sensor_path = self._data_collector.collect_data(name=sensor_name)
-            import csv
-            import os
-            self._gt_csv_file = open(os.path.join(sensor_path, "trajectory.csv"), 'w', newline='')
-            self._gt_csv_writer = csv.writer(self._gt_csv_file)
-            self._gt_csv_writer.writerow(['timestamp', 'p_x', 'p_y', 'p_z', 'q_w', 'q_x', 'q_y', 'q_z'])
-            if self._IMU is not None:
-                sensor_name = "IMU_sensor"
-                sensor_path = self._data_collector.collect_data(name=sensor_name)
-                self._IMU.initialize()
-                self._IMU.save_metadata(save_path=sensor_path)
-                self._IMU.init_logging(save_path=sensor_path) # <--- Init CSV Logging
-                self._IMU_reading = {
-                    'linear_acceleration': np.array([0.0, 0.0, 0.0]),
-                    'angular_velocity':    np.array([0.0, 0.0, 0.0]),
-                    'orientation':         np.array([1.0, 0.0, 0.0, 0.0]),
-                    'time':                0.0,
-                    'physics_step':        0    
-                }
+            self._setup_data_logging_for_sensors(uw_yaml_path)
         else:
             if self._sonar is not None:
                 self._sonar.sonar_initialize(include_unlabelled=True)
@@ -236,68 +305,7 @@ class MHL_Sensor_Example_Scenario():
 
         # Apply the physx force schema if manual control
         if ctrl_mode == "Manual control" or ctrl_mode == "ROS + Manual control":
-            from ...utils.keyboard_cmd import keyboard_cmd
-            from ...utils.gamepad_cmd import gamepad_cmd
-            import carb.input
-            from ...utils.gamepad_cmd import gamepad_cmd
-
-            self._rob_forceAPI = PhysxSchema.PhysxForceAPI.Apply(self._rob)
-            self._force_cmd = keyboard_cmd(base_command=np.array([0.0, 0.0, 0.0]),
-                                      input_keyboard_mapping={
-                                        # forward command
-                                        "W": [10.0, 0.0, 0.0],
-                                        # backward command
-                                        "S": [-10.0, 0.0, 0.0],
-                                        # leftward command
-                                        "A": [0.0, 10.0, 0.0],
-                                        # rightward command
-                                        "D": [0.0, -10.0, 0.0],
-                                         # rise command
-                                        "UP": [0.0, 0.0, 10.0],
-                                        # sink command
-                                        "DOWN": [0.0, 0.0, -10.0],
-                                      })
-            self._torque_cmd = keyboard_cmd(base_command=np.array([0.0, 0.0, 0.0]),
-                                      input_keyboard_mapping={
-                                        # yaw command (left)
-                                        "J": [0.0, 0.0, 10.0],
-                                        # yaw command (right)
-                                        "L": [0.0, 0.0, -10.0],
-                                        # pitch command (up)
-                                        "I": [0.0, -10.0, 0.0],
-                                        # pitch command (down)
-                                        "K": [0.0, 10.0, 0.0],
-                                        # row command (left)
-                                        "LEFT": [-10.0, 0.0, 0.0],
-                                        # row command (negative)
-                                        "RIGHT": [10.0, 0.0, 0.0],
-                                      })
-            self._joy_force = gamepad_cmd(
-                input_mapping={
-                    carb.input.GamepadInput.LEFT_STICK_UP:    np.array([1.0, 0.0, 0.0]),   # Forward
-                    carb.input.GamepadInput.LEFT_STICK_DOWN:  np.array([-1.0, 0.0, 0.0]),  # Backward
-                    carb.input.GamepadInput.LEFT_STICK_LEFT:  np.array([0.0, 1.0, 0.0]),   # Left
-                    carb.input.GamepadInput.LEFT_STICK_RIGHT: np.array([0.0, -1.0, 0.0]),  # Right
-                    carb.input.GamepadInput.RIGHT_TRIGGER:    np.array([0.0, 0.0, 1.0]),   # Up
-                    carb.input.GamepadInput.LEFT_TRIGGER:     np.array([0.0, 0.0, -1.0]),  # Down
-                },
-                scale=9.0 
-            )
-            
-            self._joy_torque = gamepad_cmd(
-                input_mapping={
-                    # Pitch
-                    carb.input.GamepadInput.RIGHT_STICK_UP:    np.array([0.0, -1.0, 0.0]), 
-                    carb.input.GamepadInput.RIGHT_STICK_DOWN:  np.array([0.0, 1.0, 0.0]),
-                    # Yaw
-                    carb.input.GamepadInput.RIGHT_STICK_LEFT:  np.array([0.0, 0.0, 1.0]),
-                    carb.input.GamepadInput.RIGHT_STICK_RIGHT: np.array([0.0, 0.0, -1.0]),
-                    # Roll
-                    carb.input.GamepadInput.LEFT_SHOULDER:     np.array([-1.0, 0.0, 0.0]),
-                    carb.input.GamepadInput.RIGHT_SHOULDER:    np.array([1.0, 0.0, 0.0]),
-                },
-                scale=4.0
-            )
+            self._init_manual_controllers()
 
         if ctrl_mode == "ROS control" or ctrl_mode == "ROS + Manual control":
             self._rob_forceAPI = PhysxSchema.PhysxForceAPI.Apply(self._rob)
@@ -458,31 +466,32 @@ class MHL_Sensor_Example_Scenario():
              self.generate_random_waypoints()
              return
 
-        def read_data_from_file(file_path):
-            # Initialize an empty list to store the floats
-            data = []
-            
-            # Open the file in read mode
-            with open(file_path, 'r') as file:
-                # Read each line in the file
-                for line in file:
-                    # Strip any leading/trailing whitespace and split the line by spaces
-                    float_strings = line.strip().split()
-                    
-                    # Convert the list of strings to a list of floats
-                    floats = [float(x) for x in float_strings]
-                    
-                    # Append the list of floats to the data list
-                    data.append(floats)
-            
-            return data
         try:
-            self.waypoints = read_data_from_file(waypoint_path)
+            self.waypoints = self._read_waypoints_from_file(waypoint_path)
             print('Waypoints loaded successfully.')
             print(f'Waypoint[0]: {self.waypoints[0]}')
         except:
-            self.waypoints = read_data_from_file(default_waypoint_path)
+            self.waypoints = self._read_waypoints_from_file(default_waypoint_path)
             print('Fail to load this waypoints. Back to default waypoints.')
+
+    def _read_waypoints_from_file(self, file_path):
+        # Initialize an empty list to store the floats
+        data = []
+        
+        # Open the file in read mode
+        with open(file_path, 'r') as file:
+            # Read each line in the file
+            for line in file:
+                # Strip any leading/trailing whitespace and split the line by spaces
+                float_strings = line.strip().split()
+                
+                # Convert the list of strings to a list of floats
+                floats = [float(x) for x in float_strings]
+                
+                # Append the list of floats to the data list
+                data.append(floats)
+        
+        return data
 
     def setup_data_collection(self, data_path):
         if data_path is None or data_path=="":
@@ -570,149 +579,120 @@ class MHL_Sensor_Example_Scenario():
         except Exception as e:
             print(f"[Scenario] Error destroying ROS nodes: {e}")
 
-    def update_scenario(self, step: float):
+    def _publish_robot_pose_and_path(self):
+        """Publish robot pose, TF, and update path."""
+        # Create a ROS2 Imu message
+        msg = PoseStamped()
 
+        sim_time = self._timeline.get_current_time()  # Simulation time
+        msg.header.stamp.sec = int(sim_time)
+        msg.header.stamp.nanosec = int((sim_time - int(sim_time)) * 1e9)
+        msg.header.frame_id = 'map'
+
+        # Get the full 4x4 World Transform Matrix
+        world_transform = omni.usd.get_world_transform_matrix(self._rob)
+
+        # Extract Rotation (Quaternion) and Translation
+        rot = world_transform.ExtractRotationQuat() 
+        trans = world_transform.ExtractTranslation()
+
+        # Populate Message
+        msg.pose.position.x = float(trans[0])
+        msg.pose.position.y = float(trans[1])
+        msg.pose.position.z = float(trans[2])
+
+        msg.pose.orientation.w = float(rot.GetReal())
+        msg.pose.orientation.x = float(rot.GetImaginary()[0])
+        msg.pose.orientation.y = float(rot.GetImaginary()[1])
+        msg.pose.orientation.z = float(rot.GetImaginary()[2])
         
-        if not self._running_scenario:
-            return
-        
-        self._time += step
+        # Publish the message
+        self._rob_pose_pub.publish(msg)
 
-        # Debug: Check actual update rate
-        if not hasattr(self, '_last_update_time'):
-            self._last_update_time = time.time()
-            self._update_count = 0
-        
-        self._update_count += 1
-        if self._update_count % 100 == 0:  # Print every 100 updates
-            current_time = time.time()
-            actual_hz = 100 / (current_time - self._last_update_time)
-            print(f"Physics callback rate: {actual_hz:.1f} Hz")
-            self._last_update_time = current_time
+        # Publish TF (Transform from 'map' to 'base_link')
+        tf_msg = TransformStamped()
+        tf_msg.header.stamp = msg.header.stamp
+        tf_msg.header.frame_id = 'map'
+        tf_msg.child_frame_id = 'base_link' 
 
-        # if self._rob_pose_pub is None:
-        #     return
+        tf_msg.transform.translation.x = msg.pose.position.x
+        tf_msg.transform.translation.y = msg.pose.position.y
+        tf_msg.transform.translation.z = msg.pose.position.z
+        tf_msg.transform.rotation = msg.pose.orientation
 
-        # fps control
-        # current_time = time.time()
-        # if current_time - self._last_publish_time < (1.0 / self._frequency):
-        #     return
+        self._tf_broadcaster.sendTransform(tf_msg)
 
-        if self._publish_pose:
-            # Create a ROS2 Imu message
-            msg = PoseStamped()
-
-            sim_time = self._timeline.get_current_time()  # Simulation time
-            msg.header.stamp.sec = int(sim_time)
-            msg.header.stamp.nanosec = int((sim_time - int(sim_time)) * 1e9)
-            msg.header.frame_id = 'map'
-
-            # Get the full 4x4 World Transform Matrix
-            world_transform = omni.usd.get_world_transform_matrix(self._rob)
-
-            # Extract Rotation (Quaternion) and Translation
-            # method .ExtractRotation() returns a Gf.Rotation, which we convert to Quat
-            rot = world_transform.ExtractRotationQuat() 
-            trans = world_transform.ExtractTranslation()
-
-            # Populate Message
-            msg.pose.position.x = float(trans[0])
-            msg.pose.position.y = float(trans[1])
-            msg.pose.position.z = float(trans[2])
-
-            msg.pose.orientation.w = float(rot.GetReal())
-            msg.pose.orientation.x = float(rot.GetImaginary()[0])
-            msg.pose.orientation.y = float(rot.GetImaginary()[1])
-            msg.pose.orientation.z = float(rot.GetImaginary()[2])
-            
-            # Publish the message
-            self._rob_pose_pub.publish(msg)
-
-            # Publish TF (Transform from 'map' to 'base_link')
-            tf_msg = TransformStamped()
-            tf_msg.header.stamp = msg.header.stamp
-            tf_msg.header.frame_id = 'map'
-            tf_msg.child_frame_id = 'base_link' # Assuming robot frame is base_link
-
-            tf_msg.transform.translation.x = msg.pose.position.x
-            tf_msg.transform.translation.y = msg.pose.position.y
-            tf_msg.transform.translation.z = msg.pose.position.z
-            tf_msg.transform.rotation = msg.pose.orientation
-
-            self._tf_broadcaster.sendTransform(tf_msg)
-
-            # Publish Path (Full trajectory)
-            current_pos_np = np.array([msg.pose.position.x, msg.pose.position.y, msg.pose.position.z])
-            update_path = False
-            if self._last_path_pos is None:
+        # Publish Path (Full trajectory)
+        current_pos_np = np.array([msg.pose.position.x, msg.pose.position.y, msg.pose.position.z])
+        update_path = False
+        if self._last_path_pos is None:
+            update_path = True
+        else:
+            # Calculate distance moved
+            dist = np.linalg.norm(current_pos_np - self._last_path_pos)
+            if dist > self._path_update_threshold:
                 update_path = True
-            else:
-                # Calculate distance moved
-                dist = np.linalg.norm(current_pos_np - self._last_path_pos)
-                if dist > self._path_update_threshold:
-                    update_path = True
+        
+        if update_path:
+            self._path_msg.header.stamp = msg.header.stamp
+            self._path_msg.poses.append(msg)
+            self._path_pub.publish(self._path_msg)
             
-            if update_path:
-                self._path_msg.header.stamp = msg.header.stamp
-                self._path_msg.poses.append(msg)
-                self._path_pub.publish(self._path_msg)
+            # Update tracker
+            self._last_path_pos = current_pos_np
+
+        return current_pos_np, trans
+
+    def _update_occupancy_map(self, current_pos_np, trans):
+        if self._debug_draw is not None and self._omap_generator is not None:
+            update_omap = False
+            
+            # Check if this is the first run
+            if self._last_omap_pos is None:
+                update_omap = True
+            else:
+                # Check distance from last generation point
+                dist_omap = np.linalg.norm(current_pos_np - self._last_omap_pos)
+                if dist_omap > self._omap_update_threshold:
+                    update_omap = True
+            
+            if update_omap:
+                # 1. Update Transform (Center on Robot)
+                self._omap_generator.set_transform(
+                    (float(trans[0]), float(trans[1]), float(trans[2])), 
+                    (-2.0, -2.0, -2.0), 
+                    (2.0, 2.0, 2.0)
+                )
                 
-                # Update tracker
-                self._last_path_pos = current_pos_np
-
-            if self._publish_map:
-                if self._debug_draw is not None and self._omap_generator is not None:
-                    update_omap = False
+                # Generate
+                self._omap_generator.generate3d()
+                
+                # Get Points (These are in World Frame)
+                raw_points = self._omap_generator.get_occupied_positions()
+                
+                if len(raw_points) > 0:
+                    points_np = np.array(raw_points)
                     
-                    # Check if this is the first run
-                    if self._last_omap_pos is None:
-                        update_omap = True
-                    else:
-                        # Check distance from last generation point
-                        dist_omap = np.linalg.norm(current_pos_np - self._last_omap_pos)
-                        if dist_omap > self._omap_update_threshold:
-                            update_omap = True
-                    
-                    if update_omap:
-                        # 1. Update Transform (Center on Robot)
-                        self._omap_generator.set_transform(
-                            (float(trans[0]), float(trans[1]), float(trans[2])), 
-                            (-2.0, -2.0, -2.0), 
-                            (2.0, 2.0, 2.0)
-                        )
-                        
-                        # Generate
-                        self._omap_generator.generate3d()
-                        
-                        # Get Points (These are in World Frame)
-                        raw_points = self._omap_generator.get_occupied_positions()
-                        print(raw_points)
-                        
-                        if len(raw_points) > 0:
-                            points_np = np.array(raw_points)
-                            
-                            # FILTER: Disregard points over the robot
-                            dist_to_robot = np.linalg.norm(points_np - current_pos_np, axis=1)
-                            mask = dist_to_robot > 0.6
-                            filtered_points = points_np[mask]
+                    # FILTER: Disregard points over the robot
+                    dist_to_robot = np.linalg.norm(points_np - current_pos_np, axis=1)
+                    mask = dist_to_robot > 0.6
+                    filtered_points = points_np[mask]
 
-                            # Draw
-                            if len(filtered_points) > 0:
-                                points_list = [tuple(p) for p in filtered_points]
-                                colors = [(1, 0, 0, 1)] * len(points_list) # Red
-                                sizes = [10.0] * len(points_list)
-                                
-                                self._debug_draw.draw_points(points_list, colors, sizes)
+                    # Draw
+                    if len(filtered_points) > 0:
+                        points_list = [tuple(p) for p in filtered_points]
+                        colors = [(1, 0, 0, 1)] * len(points_list) # Red
+                        sizes = [10.0] * len(points_list)
                         
-                        # Update the last position tracker
-                        self._last_omap_pos = current_pos_np
+                        self._debug_draw.draw_points(points_list, colors, sizes)
+                
+                # Update the last position tracker
+                self._last_omap_pos = current_pos_np
 
+    def _update_sensors(self, step):
         # IMU UPDATE (Fast - 200 Hz)
-        # We ALWAYS update the IMU every physics step
         if self._IMU is not None:
             self._IMU_reading = self._IMU.get_imu_data()
-            
-            # Log data if in collection mode
             if self._data_collection_mode:
                 self._IMU.log_data(
                     timestamp=self._time,
@@ -721,23 +701,19 @@ class MHL_Sensor_Example_Scenario():
                 )
 
         # CAMERA UPDATE (Slow - 20 Hz)
-        # We only render if enough SIMULATION time has passed.
-        # Initialize tracker if it doesn't exist
         if not hasattr(self, '_last_cam_time'):
             self._last_cam_time = 0.0
         
-        # Check if enough time (sim time) has passed since last render
         if self._cam is not None:
             if (self._time - self._last_cam_time) >= (1.0 / self._cam.get_frequency()):
                 self._cam.render(sim_time=self._time)
-                # Update tracker
                 self._last_cam_time = self._time
         
         if self._sonar is not None:
             self._sonar.make_sonar_data()
+            
         if self._DVL is not None:
             new_dvl_reading = self._DVL.get_linear_vel_fd(step)
-            # Only update if we have a valid reading (not NaN)
             if not np.any(np.isnan(new_dvl_reading)):
                  self._DVL_reading = new_dvl_reading
                  self._DVL.publish_ros2(self._time, self._DVL_reading)
@@ -747,7 +723,6 @@ class MHL_Sensor_Example_Scenario():
         # BARO UPDATE (Fast - 200 Hz)
         if self._baro is not None:
             self._baro_reading = self._baro.get_pressure()
-            # Publish to ROS2
             self._baro.publish_ros2(self._time, self._baro_reading)
             if self._data_collection_mode:
                 self._baro.log_data(self._time, self._baro_reading)
@@ -758,12 +733,12 @@ class MHL_Sensor_Example_Scenario():
                  wt = omni.usd.get_world_transform_matrix(self._rob)
                  t = wt.ExtractTranslation()
                  q = wt.ExtractRotationQuat()
-                 # timestamp, p_x, p_y, p_z, q_w, q_x, q_y, q_z
                  row = [self._time, t[0], t[1], t[2], q.GetReal(), q.GetImaginary()[0], q.GetImaginary()[1], q.GetImaginary()[2]]
                  self._gt_csv_writer.writerow(row)
              except Exception as e:
-                 pass # minimize spam
+                 pass 
 
+    def _handle_manual_control(self):
         if self._ctrl_mode=="Manual control" or self._ctrl_mode=="ROS + Manual control":
             # Get Keyboard inputs
             kb_force = self._force_cmd._base_command
@@ -801,50 +776,87 @@ class MHL_Sensor_Example_Scenario():
                 self._rob_forceAPI.CreateTorqueAttr().Set(Gf.Vec3f(0.0, 0.0, 0.0))
                 if self._ctrl_mode == "ROS + Manual control" and self._ros2_control_receiver is not None:
                      self._ros2_control_receiver.update_control()
-        elif self._ctrl_mode=="Waypoints":
-            if self.waypoints_control_speed:
-                SPEED = 0.01  # How much to move per frame (0.0 to 1.0)
-                ROT_SPEED = 0.01
-                THRESHOLD = 0.1 # Distance units to consider "arrived"
-                if len(self.waypoints) > 0:
-                    target_data = self.waypoints[0]
-                    target_pos = Gf.Vec3d(target_data[0], target_data[1], target_data[2])
-                    target_rot = Gf.Quatd(target_data[3], target_data[4], target_data[5], target_data[6])
 
-                    current_pos_attr = self._rob.GetAttribute('xformOp:translate')
-                    current_rot_attr = self._rob.GetAttribute('xformOp:orient')
-                    
-                    current_pos = current_pos_attr.Get()
-                    current_rot = current_rot_attr.Get()
+    def _handle_waypoints_control(self):
+        if self.waypoints_control_speed:
+            SPEED = 0.01  # How much to move per frame (0.0 to 1.0)
+            ROT_SPEED = 0.01
+            THRESHOLD = 0.1 # Distance units to consider "arrived"
+            if len(self.waypoints) > 0:
+                target_data = self.waypoints[0]
+                target_pos = Gf.Vec3d(target_data[0], target_data[1], target_data[2])
+                target_rot = Gf.Quatd(target_data[3], target_data[4], target_data[5], target_data[6])
 
-                    new_pos = current_pos + (target_pos - current_pos) * SPEED
-                    
-                    new_rot = Gf.Slerp(ROT_SPEED, current_rot, target_rot)
+                current_pos_attr = self._rob.GetAttribute('xformOp:translate')
+                current_rot_attr = self._rob.GetAttribute('xformOp:orient')
+                
+                current_pos = current_pos_attr.Get()
+                current_rot = current_rot_attr.Get()
 
-                    current_pos_attr.Set(new_pos)
-                    current_rot_attr.Set(new_rot)
-                    
-                    distance_vector = target_pos - current_pos
-                    distance = distance_vector.GetLength()
-                    if distance < THRESHOLD:
-                        self.waypoints.pop(0)
-                else:
-                    print('Waypoints finished')
-                    #generate new waypoints
-                    self.generate_random_waypoints()  
-            else:
-                if len(self.waypoints) > 0:
-                    waypoints = self.waypoints[0]
-                    self._rob.GetAttribute('xformOp:translate').Set(Gf.Vec3f(waypoints[0], waypoints[1], waypoints[2]))
-                    self._rob.GetAttribute('xformOp:orient').Set(Gf.Quatd(waypoints[3], waypoints[4], waypoints[5], waypoints[6]))
+                new_pos = current_pos + (target_pos - current_pos) * SPEED
+                
+                new_rot = Gf.Slerp(ROT_SPEED, current_rot, target_rot)
+
+                current_pos_attr.Set(new_pos)
+                current_rot_attr.Set(new_rot)
+                
+                distance_vector = target_pos - current_pos
+                distance = distance_vector.GetLength()
+                if distance < THRESHOLD:
                     self.waypoints.pop(0)
-                else:
-                    print('Waypoints finished')
-                    self.generate_random_waypoints()  
-                    
+            else:
+                print('Waypoints finished')
+                #generate new waypoints
+                self.generate_random_waypoints()  
+        else:
+            if len(self.waypoints) > 0:
+                waypoints = self.waypoints[0]
+                self._rob.GetAttribute('xformOp:translate').Set(Gf.Vec3f(waypoints[0], waypoints[1], waypoints[2]))
+                self._rob.GetAttribute('xformOp:orient').Set(Gf.Quatd(waypoints[3], waypoints[4], waypoints[5], waypoints[6]))
+                self.waypoints.pop(0)
+            else:
+                print('Waypoints finished')
+                self.generate_random_waypoints()
+
+        
+    def update_scenario(self, step: float):
+        if not self._running_scenario:
+            return
+        
+        self._time += step
+
+        # Debug: Check actual update rate
+        if not hasattr(self, '_last_update_time'):
+            self._last_update_time = time.time()
+            self._update_count = 0
+        
+        self._update_count += 1
+        if self._update_count % 100 == 0:  # Print every 100 updates
+            current_time = time.time()
+            actual_hz = 100 / (current_time - self._last_update_time)
+            print(f"Physics callback rate: {actual_hz:.1f} Hz")
+            self._last_update_time = current_time
+
+        # Update Robot Pose/Path and Map
+        if self._publish_pose:
+            current_pos_np, trans = self._publish_robot_pose_and_path()
+            
+            if self._publish_map:
+                self._update_occupancy_map(current_pos_np, trans)
+
+        # Update Sensors
+        self._update_sensors(step)
+
+        # Control Logic
+        if self._ctrl_mode=="Manual control" or self._ctrl_mode=="ROS + Manual control":
+            self._handle_manual_control()
+
+        elif self._ctrl_mode=="Waypoints":
+            self._handle_waypoints_control()
               
         elif self._ctrl_mode=="Straight line":
             SingleRigidPrim(prim_path=get_prim_path(self._rob)).set_linear_velocity(np.array([0.5,0,0])) 
+        
         elif self._ctrl_mode=="ROS control":
             if self._ros2_control_receiver is not None:
                 self._ros2_control_receiver.update_control()

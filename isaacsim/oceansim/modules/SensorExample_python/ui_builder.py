@@ -12,7 +12,7 @@ import carb
 # Isaac sim import
 from isaacsim.core.prims import SingleRigidPrim, SingleGeometryPrim
 from isaacsim.core.utils.prims import get_prim_at_path
-from isaacsim.core.utils.stage import get_current_stage, add_reference_to_stage, create_new_stage, open_stage
+from isaacsim.core.utils.stage import add_reference_to_stage, create_new_stage
 from isaacsim.core.utils.rotations import euler_angles_to_quat
 from isaacsim.core.utils.semantics import add_update_semantics
 from isaacsim.gui.components import CollapsableFrame, StateButton, get_style, setup_ui_headers, CheckBox, combo_cb_xyz_plot_builder, combo_cb_plot_builder, dropdown_builder, str_builder
@@ -23,7 +23,7 @@ from isaacsim.core.utils.extensions import get_extension_path
 # Custom import
 from .scenario import MHL_Sensor_Example_Scenario
 from .global_variables import EXTENSION_DESCRIPTION, EXTENSION_TITLE, EXTENSION_LINK
-from isaacsim.oceansim.utils.assets_utils import get_oceansim_assets_path, get_scene_path, load_config, get_assets_root
+from isaacsim.oceansim.utils.assets_utils import get_scene_path, load_config, get_assets_root
 
 class UIBuilder():
     def __init__(self):
@@ -135,6 +135,12 @@ class UIBuilder():
             info_collapsed=False
         )
 
+        self._build_sensor_frame()
+        self._build_world_controls_frame()
+        self._build_run_scenario_frame()
+        self._build_hidden_frames()
+
+    def _build_sensor_frame(self):
         sensor_choosing_frame = CollapsableFrame('Sensors', collapsed=False)
         self.frames.append(sensor_choosing_frame)
         with sensor_choosing_frame:
@@ -208,11 +214,8 @@ class UIBuilder():
                     tooltip=' Click this checkbox to activate data collection mode',
                     on_click_fn=self._on_data_collection_cb_click_fn
                 )
-                
 
-
-
-                
+    def _build_world_controls_frame(self):
         world_controls_frame = CollapsableFrame("World Controls", collapsed=False)
         self.frames.append(world_controls_frame)
         with world_controls_frame:
@@ -247,6 +250,7 @@ class UIBuilder():
                 self._reset_btn.enabled = False
                 self.wrapped_ui_elements.append(self._reset_btn)
 
+    def _build_run_scenario_frame(self):
         run_scenario_frame = CollapsableFrame("Run Scenario", collapsed=False)
         self.frames.append(run_scenario_frame)
         with run_scenario_frame:
@@ -262,6 +266,7 @@ class UIBuilder():
                 self._scenario_state_btn.enabled = False
                 self.wrapped_ui_elements.append(self._scenario_state_btn)
 
+    def _build_hidden_frames(self):
         self.sensor_reading_frame = CollapsableFrame('Sensor Reading', collapsed=False, visible=False)
         self.frames.append(self.sensor_reading_frame)
         self.waypoints_frame = CollapsableFrame('Waypoints',collapsed=False, visible=False)
@@ -281,9 +286,6 @@ class UIBuilder():
                 folder_dialog_title='Select the folder to save the collected sensor data'
             )
             self._data_save_path_field.add_value_changed_fn(self._on_data_save_path_changed_fn)
-
-
-
 
     ######################################################################################
     # Functions Below This Point Related to Scene Setup (USD\PhysX..)
@@ -325,6 +327,11 @@ class UIBuilder():
         The user should now load their assets onto the stage and add them to the World Scene.
         """
         create_new_stage()
+        self._setup_environment()
+        self._setup_robot()
+        self._init_sensors()
+
+    def _setup_environment(self):
         if self._USD_path_field.get_value_as_string() != "":
             scene_prim_path = '/World/scene'
             add_reference_to_stage(usd_path=self._USD_path_field.get_value_as_string(), prim_path=scene_prim_path)
@@ -415,7 +422,7 @@ class UIBuilder():
                         else:
                             print(f"[WARN] Could not find prim at {target_path} to apply semantics.")
 
-            
+    def _setup_robot(self):
         # add bluerov robot as reference
         robot_prim_path = "/World/rob"
         robot_usd_path = get_scene_path("robot")
@@ -435,8 +442,9 @@ class UIBuilder():
                         translation=np.array([-2.0, 0.0, -0.8]))
 
         set_camera_view(eye=np.array([5,0.6,0.4]), target=rob_collider_prim.get_world_pose()[0])
-        
 
+    def _init_sensors(self):
+        robot_prim_path = "/World/rob"
         if self._use_sonar:
             print("[Debug] Initializing Sonar...")
             # Cleanup old sonar if it exists to prevent Replicator conflicts
@@ -769,6 +777,8 @@ class UIBuilder():
                 self._DVL_event_sub = None
         else:
             self._DVL_event_sub = None
+
+
 
     def _on_DVL_step(self, e: carb.events.IEvent):
         # Casting np.float32 to float32 is necessary for the ui.Plot expects a consistent data type flow
