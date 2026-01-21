@@ -1,0 +1,61 @@
+paths:
+  assets_root: "/home/osim-mir/OceanSimAssets"
+  data_collection_root: "~/data_collected_oceansim"
+  
+  configs:
+    map: "isaacsim/oceansim/config/map.yaml"
+    imu: "isaacsim/oceansim/config/imu_config.yaml"
+  
+  # Relative to assets_root
+  scenes:
+    robot: "Bluerov/BROV_low.usd"
+
+  environment:
+    - name: "mhl_water"
+      usd_path: "collected_MHL/mhl_water.usd"
+      prim_path: "/Root/scene"
+      collision: true
+      # semantics:
+      #   - type: "reflectivity"
+      #     value: "1.0"
+      #     path: "Mesh/mesh" # Relative to prim_path
+
+    - name: "rock"
+      usd_path: "collected_rock/rock.usd"
+      prim_path: "/World/rock"
+      translation: [1.0, 0.1, -1.5]
+      orientation: [0.0, 0.0, 90] # Degrees
+      collision: true
+      collision_approximation: "convexDecomposition"
+      rigid_body: true
+      semantics:
+        - type: "reflectivity"
+          value: "2.0"
+          path: "Mesh/mesh"
+    # - name: "car"
+    #   usd_path: "collected_MHL/car.usd"
+    #   prim_path: "/World/car"
+    #   translation: [15.91378, 2.18564, -1.20405]
+    #   orientation: [114.0, -13.0, 5.0] # Degrees
+    #   scale: [0.015, 0.015, 0.015]
+    #   collision: true
+    #   collision_approximation: "convexDecomposition"
+    #   rigid_body: true
+    
+    # - name: "rock_wall"
+    #   usd_path: "collected_MHL/rock_walls.usd"
+    #   prim_path: "/World/rock_wall"
+    #   translation: [0, 0, 0]
+    #   orientation: [0.0, 0.0, 0] # Degrees
+    #   collision: true
+    #   collision_approximation: "convexDecomposition"
+    #   rigid_body: true
+    #   semantics:
+    #     - type: "reflectivity"
+    #       value: "2.0"
+    #       path: "Mesh/mesh"
+
+    
+  # Relative to extension root or absolute
+  waypoints_default: "demo/demo_waypoints.txt"
+

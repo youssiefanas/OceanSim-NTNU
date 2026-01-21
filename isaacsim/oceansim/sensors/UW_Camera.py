@@ -9,10 +9,28 @@ import numpy as np
 import warp as wp
 import yaml
 import carb
+import os
 
 # Custom import
 from isaacsim.oceansim.utils.UWrenderer_utils import UW_render
+import PIL.Image
 
+'''
+Attention:
+
+Before OceanSim extension being activated, the extension isaacsim.ros2.bridge should be activated, otherwise rclpy will
+fail to be loaded.
+
+so, we suggest that make sure the extension isaacsim.ros2.bridge is being setup to "AUTOLOADED" in Window->Extension.
+'''
+import rclpy
+from sensor_msgs.msg import CompressedImage
+import time
+import cv2
+
+# Default Underwater Parameters (Jerlov 5C - Turbid)
+# [Backscatter R, G, B, Backscatter Coeff R, G, B, Atten Coeff R, G, B]
+UW_param =[0.0, 0.31, 0.24, 0.05, 0.05, 0.2, 0.05, 0.05, 0.05 ]
 
 class UW_Camera(Camera):
 
@@ -64,7 +82,8 @@ class UW_Camera(Camera):
                    viewport: bool = True,
                    writing_dir: str = None,
                    UW_yaml_path: str = None,
-                   physics_sim_view=None):
+                   physics_sim_view=None,
+                   enable_ros2_pub=True, uw_img_topic="/oceansim/robot/uw_img", ros2_pub_frequency=20, ros2_pub_jpeg_quality=50):
         
         """Configure underwater rendering properties and initialize pipelines.
     
@@ -77,7 +96,11 @@ class UW_Camera(Camera):
             viewport (bool, optional): Enable viewport visualization. Defaults to True.
             writing_dir (str, optional): Directory to save rendered images. Defaults to None.
             UW_yaml_path (str, optional): Path to YAML file with water properties. Defaults to None.
-            physics_sim_view (_type_, optional): _description_. Defaults to None.            
+            physics_sim_view (_type_, optional): _description_. Defaults to None.          
+            enable_ros2_pub (bool, optional): Enable ROS2 communication. Defaults to True.
+            uw_img_topic (str, optional): ROS2 topic name for UW image. Defaults to "/oceansim/robot/uw_img".
+            ros2_pub_frequency (int, optional): ROS2 publish frequency. Defaults to 5.
+            ros2_pub_jpeg_quality (int, optional): ROS2 publish jpeg quality. Defaults to 50.
     
         """
         self._id = 0
@@ -85,8 +108,14 @@ class UW_Camera(Camera):
         self._device = wp.get_preferred_device()
         super().initialize(physics_sim_view)
 
-        if UW_yaml_path is not None:
-            with open(UW_yaml_path, 'r') as file:
+        self._writing_dir = writing_dir
+        self._UW_yaml_path = UW_yaml_path
+        #yaml path
+        print(f'UW YAML Path cam file: {self._UW_yaml_path}')
+
+        if self._UW_yaml_path and os.path.exists(self._UW_yaml_path):
+            print(f'UW YAML Path cam file: {self._UW_yaml_path} exists')
+            with open(self._UW_yaml_path, 'r') as file:
                 try:
                     # Load the YAML content
                     yaml_content = yaml.safe_load(file)
@@ -115,43 +144,174 @@ class UW_Camera(Camera):
 
         if writing_dir is not None:
             self._writing = True
-            self._writing_backend = rep.BackendDispatch({"paths": {"out_dir": writing_dir}})
+            writing_dir_RGB = os.path.join(writing_dir, 'RGB')
+            if not os.path.exists(writing_dir_RGB):
+                os.makedirs(writing_dir_RGB)
+            self._writing_dir_RGB = writing_dir_RGB
+            writing_dir_depth =  os.path.join(writing_dir, 'Depth')
+            if not os.path.exists(writing_dir_depth):
+                os.makedirs(writing_dir_depth)
+            self._writing_dir_depth = writing_dir_depth
+            if not os.path.exists(writing_dir_depth):
+                os.makedirs(writing_dir_depth)
+            self._writing_dir_depth = writing_dir_depth
+
+        # ROS2 configuration
+        self._enable_ros2_pub = enable_ros2_pub
+        self._uw_img_topic = uw_img_topic
+        self._last_publish_time = 0.0
+        self._ros2_pub_frequency = ros2_pub_frequency     # publish frequency, hz
+        self._ros2_pub_jpeg_quality = ros2_pub_jpeg_quality
+        self._setup_ros2_publisher()
         
         print(f'[{self._name}] Initialized successfully. Data writing: {self._writing}')
     
-    def render(self):
-        """Process and display a single frame with underwater effects.
-    
-        Note:
-            - Updates viewport display if enabled
-            - Saves image to disk if writing_dir was specified
-        """
-        raw_rgba = self._rgba_annot.get_data()
-        depth = self._depth_annot.get_data()
-        if raw_rgba.size !=0:
-            uw_image = wp.zeros_like(raw_rgba)
-            wp.launch(
-                dim=np.flip(self.get_resolution()),
-                kernel=UW_render,
-                inputs=[
-                    raw_rgba,
-                    depth,
-                    self._backscatter_value,
-                    self._atten_coeff,
-                    self._backscatter_coeff
-                ],
-                outputs=[
-                    uw_image
-                ]
-            )  
+    def _setup_ros2_publisher(self):
+        '''
+        setup the publisher for uw image
+        '''
+        try:
+            if not self._enable_ros2_pub:
+                return
             
-            if self._viewport:
-                self._provider.set_bytes_data_from_gpu(uw_image.ptr, self.get_resolution())
-            if self._writing:
-                self._writing_backend.schedule(write_image, path=f'UW_image_{self._id}.png', data=uw_image)
-                print(f'[{self._name}] [{self._id}] Rendered image saved to {self._writing_backend.output_dir}')
+            # Initialize ROS2 context if not already done
+            if not rclpy.ok():
+                rclpy.init()
+                print(f'[{self._name}] ROS2 context initialized')
 
-            self._id += 1
+            # Create uw image publisher node
+            node_name = f'oceansim_rob_uw_img_pub_{self._name.lower()}'.replace(' ', '_')
+            self._ros2_uw_img_node = rclpy.create_node(node_name)
+            self._uw_img_pub = self._ros2_uw_img_node.create_publisher(
+                CompressedImage, 
+                self._uw_img_topic, 
+                10
+            )
+        
+        except Exception as e:
+            print(f'[{self._name}] ROS2 uw image publisher setup failed: {e}')
+
+    def _ros2_publish_uw_img(self, uw_img, sim_time=None):
+        """
+        publish the uw image
+        """
+        try:
+            if self._uw_img_pub is None:
+                return
+
+            # fps control
+            current_time = time.time()
+            if current_time - self._last_publish_time < (1.0 / self._ros2_pub_frequency):
+                return
+
+            # Convert the image
+            uw_image_cpu = uw_img.numpy()
+            if uw_image_cpu.dtype != np.uint8:
+                uw_image_cpu = uw_image_cpu.astype(np.uint8)    # UW_render return 'rgba'
+            uw_image_bgr = cv2.cvtColor(uw_image_cpu, cv2.COLOR_RGBA2BGR)
+            encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), self._ros2_pub_jpeg_quality]      # JPEG quality, default 90, can be 0-100
+            result, compressed_img = cv2.imencode('.jpg', uw_image_bgr, encode_param)
+            if not result:
+                print(f'[{self._name}] Failed to compress image to JPEG')
+                return
+
+            # Create a ROS2 Image message
+            msg = CompressedImage()
+            if sim_time:
+                msg.header.stamp.sec = int(sim_time)
+                msg.header.stamp.nanosec = int((sim_time - int(sim_time)) * 1e9)
+            else:
+                msg.header.stamp = self._ros2_uw_img_node.get_clock().now().to_msg()
+            msg.header.frame_id = 'uw_image'
+            msg.format = 'jpeg'
+            msg.data = compressed_img.tobytes()
+            
+            # Publish the message
+            self._uw_img_pub.publish(msg)
+
+            rclpy.spin_once(self._ros2_uw_img_node, timeout_sec=0.0)
+
+            self._last_publish_time = current_time
+            
+
+            # debug
+            # self._ros2_uw_img_node.get_logger().info(
+            #     f'Published image: encoding={msg.encoding}, '
+            #     f'width={msg.width}, height={msg.height}, step={msg.step}, '
+            #     f'data_size={len(msg.data)}'
+            # )
+
+        except Exception as e:
+            print(f'[{self._name}] ROS2 uw image publish failed: {e}')
+
+    def render(self, sim_time=None):
+        """Process and display a single frame with underwater effects."""
+        try:
+            # 1. Get Data
+            raw_rgba = self._rgba_annot.get_data(device="cuda")
+            depth = self._depth_annot.get_data(device="cuda") 
+            
+            if raw_rgba.size != 0:
+                # 2. Render Underwater Effect (Use the GPU 'depth' variable here for speed)
+                uw_image = wp.zeros_like(raw_rgba)
+                wp.launch(
+                    dim=np.flip(self.get_resolution()),
+                    kernel=UW_render,
+                    inputs=[
+                        raw_rgba,
+                        depth, # Keep using the GPU variable for the kernel
+                        self._backscatter_value,
+                        self._atten_coeff,
+                        self._backscatter_coeff
+                    ],
+                    outputs=[uw_image]
+                )  
+                
+                # 3. Viewport Update
+                if self._viewport:
+                    self._provider.set_bytes_data_from_gpu(uw_image.ptr, self.get_resolution())
+                
+                # 4. Data Writing
+                if self._writing:
+                    # Save RGB Image
+                    # uw_image is a Warp array (RGBA), convert to numpy
+                    uw_image_np = uw_image.numpy()
+                    if uw_image_np.dtype != np.uint8:
+                         uw_image_np = uw_image_np.astype(np.uint8)
+                         
+                    # Save path
+                    img_path = os.path.join(self._writing_dir_RGB, f'UW_image_{self._id}.png')
+                    # Robust check: ensure dir exists
+                    if not os.path.exists(os.path.dirname(img_path)):
+                        os.makedirs(os.path.dirname(img_path))
+                        
+                    PIL.Image.fromarray(uw_image_np, "RGBA").save(img_path)
+                    
+                    # Save Depth Data (Use the CPU variable 'depth_data_cpu' here)
+                    # We use os.path.join to ensure it goes to the correct folder
+                    depth_filename = f'Depth_{self._id}.npy'
+                    depth_full_path = os.path.join(self._writing_dir_depth, depth_filename)
+                    
+                    # Fetch depth to CPU only when needed
+                    if hasattr(depth, "numpy"):
+                         depth_data_cpu = depth.numpy()
+                    elif hasattr(depth, "cpu"): 
+                         depth_data_cpu = depth.cpu().numpy()
+                    else:
+                         depth_data_cpu = depth
+
+                    np.save(file=depth_full_path, arr=depth_data_cpu)
+                
+                # 5. ROS2 Publishing
+                if self._enable_ros2_pub:
+                    self._ros2_publish_uw_img(uw_image, sim_time)
+
+                self._id += 1
+
+        except Exception as e:
+            print(f"Error getting annotator data: {e}")
+            import traceback
+            traceback.print_exc()
 
     def make_viewport(self):
         """Create a viewport window for real-time visualization.
@@ -195,6 +355,19 @@ class UW_Camera(Camera):
             self.ui_destroy()
             
         print(f'[{self._name}] Annotator detached. AnnotatorCache cleaned.')
+
+        # ROS2 cleanup
+        if self._enable_ros2_pub:
+            try:
+                if self._uw_img_pub:
+                    self._uw_img_pub.destroy()
+                    self._uw_img_pub = None
+                if self._ros2_uw_img_node:
+                    self._ros2_uw_img_node.destroy_node()
+                    self._ros2_uw_img_node = None
+                print(f'[{self._name}] ROS2 node and publisher destroyed.')
+            except Exception as e:
+                print(f'[{self._name}] ROS2 cleanup failed: {e}')
     
     
     def ui_destroy(self):

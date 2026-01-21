@@ -1,44 +1,128 @@
 import os
-import json
+import yaml
 
-OCEANSIM_ASSET_PATH=None
+def get_config_path() -> str:
+    """Returns the absolute path to the config.yaml file."""
+    # current file is in utils/, config is in ../config/config.yaml
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base_dir, "config", "config.yaml")
 
-def get_oceansim_assets_path() -> str:
-    global OCEANSIM_ASSET_PATH
-    
-    if OCEANSIM_ASSET_PATH is not None:
-        return OCEANSIM_ASSET_PATH
-    
-    json_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'asset_path.json'))
-
-    if not os.path.isfile(json_path):
-        raise FileNotFoundError(
-            f"'asset_path.json' not found at {json_path}. "
-            "Run 'register_asset_path.py <path_to_assets>' to register the asset path."
-        )
-
-    try:
-        with open(json_path, 'r') as f:
-            json_data = json.load(f)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"'asset_path.json' is not valid JSON: {e}")
-
-    if "asset_path" not in json_data:
-        raise KeyError(
-            f"'asset_path.json' at {json_path} does not contain the required 'asset_path' key."
-        )
+def load_config() -> dict:
+    """Loads the config.yaml file."""
+    config_path = get_config_path()
+    if not os.path.exists(config_path):
+        raise FileNotFoundError(f"Config file not found at: {config_path}")
         
-    asset_path = json_data["asset_path"]
+    try:
+        with open(config_path, 'r') as f:
+            return yaml.safe_load(f)
+    except yaml.YAMLError as e:
+        raise ValueError(f"Error parsing config.yaml: {e}")
+
+def get_assets_root() -> str:
+    """Returns the root path for assets."""
+    config = load_config()
+    path = config.get("paths", {}).get("assets_root", "")
+    if not path:
+        raise ValueError("assets_root not defined in config.yaml")
+    return path
+
+def get_data_collection_root() -> str:
+    """Returns the default root path for data collection."""
+    config = load_config()
+    path = config.get("paths", {}).get("data_collection_root", "~/data_collected_oceansim")
+    return os.path.expanduser(path)
+
+def get_scene_path(scene_key: str) -> str:
+    """Returns the full path for a specific scene asset.
     
-    if not os.path.isdir(asset_path):
-        raise FileNotFoundError(f"The provided asset path does not exist: {asset_path}. "
-                                "Run /path/to/oceansim/config/register_asset_path.py /path/to/assets as described in the ReadMe.")
+    Args:
+        scene_key: The key in config.yaml under paths.scenes (e.g., 'mhl_water', 'robot')
+    """
+    config = load_config()
+    rel_path = config.get("paths", {}).get("scenes", {}).get(scene_key, "")
+    if not rel_path:
+        raise ValueError(f"Scene path for '{scene_key}' not defined in config.yaml")
+        
+    return os.path.join(get_assets_root(), rel_path)
 
-    OCEANSIM_ASSET_PATH = asset_path
-    return asset_path
+def get_waypoints_default_path() -> str:
+    """Returns the full path to the default waypoints file."""
+    config = load_config()
+    # Logic: if path is absolute, return as is. If relative, assume relative to extension root.
+    # Extension root is parent of 'isaacsim' package folder in this structure logic?
+    # Let's inspect where this file is relative to extension root.
+    # File: .../isaacsim/oceansim/utils/assets_utils.py
+    # Extension Root (setup.py location usually): .../
+    # Actually, let's keep it simple. If it looks relative, make it relative to the extension root.
+    # How to find extension root reliably? 
+    # In `ui_builder.py` they use `get_extension_path(self._ext_id)`.
+    # Here we don't have ext_id without context.
+    # But we know the file structure.
+    # .../OceanSim-NTNU/isaacsim/oceansim/utils/assets_utils.py
+    # .../OceanSim-NTNU/ is the extension root.
+    
+    rel_path = config.get("paths", {}).get("waypoints_default", "")
+    if os.path.isabs(rel_path):
+        return rel_path
+        
+    return os.path.join(_get_extension_root(), rel_path)
 
-# Run once to validate on import
-get_oceansim_assets_path()
+def get_map_config_path() -> str:
+    """Returns the full path to the map.yaml file."""
+    config = load_config()
+    rel_path = config.get("paths", {}).get("configs", {}).get("map", "")
+    if not rel_path:
+        # Fallback if not defined
+        return os.path.join(_get_extension_root(), "isaacsim/oceansim/config/map.yaml")
+        
+    if os.path.isabs(rel_path):
+        return rel_path
+    
+    return os.path.join(_get_extension_root(), rel_path)
+
+def get_imu_config_path() -> str:
+    """Returns the full path to the imu_config.yaml file."""
+    config = load_config()
+    rel_path = config.get("paths", {}).get("configs", {}).get("imu", "")
+    if not rel_path:
+         # Fallback
+         return os.path.join(_get_extension_root(), "isaacsim/oceansim/config/imu_config.yaml")
+
+    if os.path.isabs(rel_path):
+        return rel_path
+
+    return os.path.join(_get_extension_root(), rel_path)
+
+def _get_extension_root() -> str:
+    """Returns the extension root directory."""
+    # utils -> oceansim -> isaacsim -> OceanSim-NTNU
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    return os.path.abspath(os.path.join(current_dir, "../../../"))
+
+# Backwards compatibility alias if needed, but we should refactor usages.
+def get_oceansim_assets_path() -> str:
+    return get_assets_root()
+
+def get_map_image_filename() -> str:
+    """Returns the filename for the map image (e.g. map.png)."""
+    config = load_config()
+    return config.get("filenames", {}).get("map_image", "map.png")
+
+def get_map_yaml_filename() -> str:
+    """Returns the filename for the map yaml (e.g. map.yaml)."""
+    config = load_config()
+    return config.get("filenames", {}).get("map_yaml", "map.yaml")
+
+def get_imu_metadata_filename() -> str:
+    """Returns the filename for the IMU metadata (e.g. imu_metadata.yaml)."""
+    config = load_config()
+    return config.get("filenames", {}).get("imu_metadata", "imu_metadata.yaml")
 
 if __name__ == "__main__":
-    print("OceanSim Assets are configured at", get_oceansim_assets_path())
+    print("Config Path:", get_config_path())
+    print("Assets Root:", get_assets_root())
+    try:
+        print("Robot Path:", get_scene_path("robot"))
+    except Exception as e:
+        print(e)

@@ -607,13 +607,20 @@ class ImagingSonarSensor(Camera):
             - Required for proper shutdown when done using the sensor
             - Also closes viewport window if one was created
         """
-        self.pointcloud_annot.detach(self._render_product_path)
-        self.cameraParams_annot.detach(self._render_product_path)
-        self.semanticSeg_annot.detach(self._render_product_path)
+        if self.pointcloud_annot:
+            self.pointcloud_annot.detach(self._render_product_path)
+            rep.AnnotatorCache.clear(self.pointcloud_annot)
+            self.pointcloud_annot = None
 
-        rep.AnnotatorCache.clear(self.pointcloud_annot)
-        rep.AnnotatorCache.clear(self.cameraParams_annot)
-        rep.AnnotatorCache.clear(self.semanticSeg_annot)
+        if self.cameraParams_annot:
+            self.cameraParams_annot.detach(self._render_product_path)
+            rep.AnnotatorCache.clear(self.cameraParams_annot)
+            self.cameraParams_annot = None
+            
+        if self.semanticSeg_annot:
+            self.semanticSeg_annot.detach(self._render_product_path)
+            rep.AnnotatorCache.clear(self.semanticSeg_annot)
+            self.semanticSeg_annot = None
 
 
         print(f'[{self._name}] Annotator detached. AnnotatorCache cleaned.')

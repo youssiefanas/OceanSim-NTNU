@@ -169,3 +169,11 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+test_trajectory_gen.py
+isaacsim/oceansim/config/coral_reef.png
+isaacsim/oceansim/config/map.png
+mono_results/ape_plot.pdf
+mono_results/ape_stats.csv
+mono_results/rpe_plot.pdf
+mono_results/rpe_stats.csv
+mono_results/trajectory_plot.pdf
